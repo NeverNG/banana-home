@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>香蕉起始页</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" type="image/png" href="img/banana.png" />
+</head>
+<body>
+  <!-- 动态背景 -->
+  <div class="bg" id="bg"></div>
+
+  <main class="container">
+    <!-- ===== 最上一栏:搜索框 ===== -->
+    <section class="search-box">
+      <div class="search-bar">
+        <button class="engine-switch" id="engine-switch" title="切换搜索引擎"></button>
+        <span class="search-divider"></span>
+        <input
+          id="search-input"
+          type="text"
+          placeholder="搜索一下…(回车搜索)"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <span class="search-divider"></span>
+        <button id="search-btn" title="搜索">搜索</button>
+      </div>
+      <!-- 搜索引擎选择浮层 -->
+      <div class="engine-picker" id="engine-picker" hidden></div>
+      <!-- 搜索历史 / 关联建议下拉 -->
+      <div class="search-dropdown" id="search-dropdown" hidden></div>
+    </section>
+
+    <!-- ===== 下一栏:左 / 中 / 右三列 ===== -->
+    <div class="main-row">
+    <!-- ===== 左栏:时间 / 日期 / 地图 / 天气 ===== -->
+    <aside class="col-left">
+      <div class="col-pages" id="col-pages">
+      <div class="col-page active">
+        <!-- 时间 / 日期卡片 -->
+        <div class="clock-card">
+          <div class="time" id="time">--:--</div>
+          <div class="date" id="date">----年--月--日 星期-</div>
+        </div>
+
+        <!-- 日历卡片:当月天数 + 农历 -->
+        <div class="calendar-card">
+          <div class="cal-header">
+            <div class="cal-title" id="cal-title">…</div>
+            <span class="cal-nav-group">
+              <button type="button" class="cal-nav" id="cal-prev" title="上个月">‹</button>
+              <button type="button" class="cal-nav" id="cal-next" title="下个月">›</button>
+              <button type="button" class="cal-today" id="cal-today" title="回到今天">今</button>
+            </span>
+          </div>
+          <div class="cal-week">
+            <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+        </div>
+
+        <div class="quote-card" id="quote-card" title="点击换一句">
+          <div class="quote-text" id="quote-text"></div>
+          <div class="quote-author" id="quote-author"></div>
+          <div class="quote-explain" id="quote-explain" hidden></div>
+        </div>
+
+
+      </div><!-- /页1 -->
+
+      <div class="col-page">
+      <!-- 地图卡片(独立) -->
+      <div class="map-card" id="geo-map-card" title="点击使用浏览器精确定位">
+        <div class="geo-map-wrap">
+          <iframe
+            class="geo-map"
+            id="geo-map-frame"
+            src=""
+            scrolling="no"
+            frameborder="0"
+            title="当前位置地图"
+          ></iframe>
+          <!-- 当前坐标标题(卡片左上角) -->
+          <div class="map-title" id="map-title"></div>
+        </div>
+        <!-- 定位状态提示(卡片内) -->
+        <div class="map-tip" id="map-tip" hidden></div>
+      </div>
+
+      <!-- 天气卡片(自绘:Open-Meteo 数据 + emoji 图标) -->
+      <div class="weather-card" id="geo-weather-card">
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">🌤</span> 天气情况</span>
+          <span class="widget-actions">
+            <button class="mini-btn weather-effect-toggle" id="weather-effect-toggle" title="跟随当前位置天气显示页面效果(晴/多云/刮风/雨/雪)">⛅</button>
+          </span>
+        </div>
+        <div class="weather-display" id="weather-display">
+          <div class="weather-main">
+            <div class="weather-icon" id="weather-icon">🌤</div>
+            <div class="weather-temp" id="weather-temp">--°C</div>
+          </div>
+          <div class="weather-desc" id="weather-desc">天气加载中…</div>
+          <div class="weather-daily" id="weather-daily" hidden></div>
+        </div>
+      </div>
+
+      <!-- 桌面宠物卡片(vscode-pets 精灵,MIT):随机行为 + 切换/喂食/拖拽 -->
+      <div class="pet-card">
+        <div class="pet-head">
+          <span class="pet-title"><span class="title-icon">🐾</span> 桌面宠物</span>
+          <span class="pet-actions">
+            <button type="button" id="pet-switch" class="pet-btn" title="切换宠物">🐾</button>
+            <button type="button" id="pet-feed" class="pet-btn" title="喂食">🍪</button>
+          </span>
+        </div>
+        <div class="pet-stage" id="pet-stage">
+          <img id="pet-img" src="" alt="桌面宠物" draggable="false" />
+        </div>
+        <div class="pet-info" id="pet-info">小助手 · 点击互动</div>
+      </div>
+      </div><!-- /页2 -->
+
+      <div class="col-page">
+      <!-- 白噪音组件:本地音效循环播放,上一首 / 播放暂停 / 下一首 -->
+      <div class="music-card">
+        <div class="widget-head">
+          <span class="widget-title" id="music-title"><span class="title-icon">🎵</span> 白噪音 · 雨声</span>
+        </div>
+        <div class="music-cover" id="music-cover">
+          <span id="music-cover-emoji">🌧</span>
+        </div>
+        <div class="music-progress">
+          <span class="music-time" id="music-time-cur">0:00</span>
+          <div class="music-track"><div class="music-bar" id="music-bar"></div></div>
+          <span class="music-time" id="music-time-dur">0:00</span>
+        </div>
+        <div class="music-controls">
+          <button type="button" id="music-prev" class="music-btn" title="上一个音效">⏮</button>
+          <button type="button" id="music-toggle" class="music-btn music-play" title="播放">▶</button>
+          <button type="button" id="music-next" class="music-btn" title="下一个音效">⏭</button>
+        </div>
+      </div>
+
+      <!-- 股票行情卡片 -->
+      <div class="stock-card">
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">📈</span> 股票行情</span>
+          <span class="widget-actions">
+            <span class="widget-update" id="stock-update"></span>
+            <button type="button" id="stock-cloud-btn" class="mini-btn" title="A股大盘云图">🔍</button>
+            <button type="button" id="stock-manage-btn" class="mini-btn" title="管理自选股">⋮</button>
+          </span>
+        </div>
+        <div class="stock-list" id="stock-list"><div class="widget-empty">加载中…</div></div>
+      </div>
+      <!-- 系统监控卡片 -->
+      <div class="monitor-card">
+        <div class="widget-head"><span class="widget-title"><span class="title-icon">🖥</span> 系统监控</span></div>
+        <div class="monitor-row">
+          <span class="monitor-name">CPU</span>
+          <div class="monitor-bar"><div class="monitor-fill" id="cpu-bar"></div></div>
+          <span class="monitor-val" id="cpu-val">--%</span>
+        </div>
+        <div class="monitor-row">
+          <span class="monitor-name">内存</span>
+          <div class="monitor-bar"><div class="monitor-fill" id="mem-bar"></div></div>
+          <span class="monitor-val" id="mem-val">--%</span>
+        </div>
+        <div class="monitor-mem" id="monitor-mem">可用内存 --</div>
+      </div>
+
+      </div><!-- /页3 -->
+
+      <div class="col-page">
+      <!-- 今日热榜卡片 -->
+      <div class="hot-card">
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">🔥</span> 今日热榜</span>
+        </div>
+        <div class="hot-tabs" id="hot-tabs"><!-- 榜单页签由 hot.js 按 HOT_BOARDS 动态生成 --></div>
+        <div class="hot-list" id="hot-list"><div class="widget-empty">加载中…</div></div>
+      </div>
+
+      <!-- 每日扑克牌卡片:按日期种子确定性随机三张牌,当日刷新不变,次日自动更换 -->
+      <div class="poker-card">
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">🃏</span> 今日手牌</span>
+          <span class="widget-actions"><span class="poker-date" id="poker-date"></span></span>
+        </div>
+        <div class="poker-hand" id="poker-hand"><!-- 由 JS 按日期种子渲染三张牌 --></div>
+      </div>
+      </div><!-- /页4 -->
+
+      <div class="col-page">
+      <!-- 梦想之车卡片:汽车之家 选车(品牌/车系下拉)+ VR 全景看车 -->
+      <div class="dreamcar-card">
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">🚗</span> 梦想之车</span>
+          <span class="widget-actions">
+            <button type="button" id="dc-auto" class="mini-btn dreamcar-auto" title="自动旋转 / 停止">▶</button>
+          </span>
+        </div>
+        <!-- 品牌 / 车系 联动下拉(仿 antd Select 交互) -->
+        <div class="dc-select-row">
+          <div class="dc-select" id="dc-brand" tabindex="0" title="选择品牌">
+            <span class="dc-select-placeholder" id="dc-brand-text">选择品牌</span>
+            <span class="dc-select-arrow">▾</span>
+          </div>
+          <div class="dc-select" id="dc-series" tabindex="0" title="选择车系">
+            <span class="dc-select-placeholder" id="dc-series-text">选择车系</span>
+            <span class="dc-select-arrow">▾</span>
+          </div>
+        </div>
+        <!-- 品牌/车系下拉浮层(由 JS 渲染,字母分组 / 厂商分组 + 搜索过滤) -->
+        <div class="dc-dropdown" id="dc-dropdown" hidden></div>
+        <!-- 车型(款型)选择:与品牌/车系同风格下拉 -->
+        <div class="dc-spec-row" id="dc-spec-row" hidden>
+          <div class="dc-select" id="dc-spec" tabindex="0" title="选择款型">
+            <span class="dc-select-placeholder" id="dc-spec-text">选择款型</span>
+            <span class="dc-select-arrow">▾</span>
+          </div>
+        </div>
+        <!-- 展示舞台:VR 全景看车(360° 实拍序列图,自动/手动旋转) -->
+        <div class="dreamcar-stage" id="dc-stage">
+          <canvas id="dc-canvas" alt="车型 VR 全景"></canvas>
+          <!-- 颜色选择:悬浮于预览窗口正上方 -->
+          <div class="dreamcar-colors" id="dc-colors" hidden title="选择车身颜色"></div>
+          <div class="dreamcar-loading" id="dc-loading" hidden>正在加载…</div>
+          <div class="dreamcar-hint" id="dc-hint" hidden>拖动旋转 · 松开后自动旋转</div>
+        </div>
+        <div class="dreamcar-empty" id="dc-empty">选择品牌与车型,VR 全景看车展示 ✨</div>
+      </div>
+
+      <!-- 访问活跃度卡片:GitHub 风格贡献日历(最近半年) -->
+      <div class="activity-card">
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">📊</span> 访问活跃度</span>
+        </div>
+        <div class="act-chart" id="act-chart"><!-- 由 JS 渲染 --></div>
+        <div class="act-footer">
+          <div class="act-stats" id="act-stats"></div>
+          <div class="act-legend" title="颜色越深,当日刷新主页次数越多">
+            <span>少</span>
+            <i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i>
+            <span>多</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 八卦罗盘卡片:主图为太极阴阳鱼 + 八卦爻线卦名环,支持 1/4、2/4、3/4 高度;☯ 按钮查看完整九环演化图 -->
+      <div class="bagua-card" id="bagua-card">
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">🧭</span> 八卦罗盘</span>
+          <span class="widget-actions">
+            <span class="bagua-shichen" id="bagua-shichen" title="当前时辰">--</span>
+            <button type="button" id="bagua-chart" class="mini-btn" title="罗盘">☯</button>
+            <button type="button" id="bagua-rand" class="mini-btn" title="随机起一卦">🎲</button>
+          </span>
+        </div>
+        <div class="bagua-stage" id="bagua-stage">
+          <div class="bagua-compass" id="bagua-compass"><!-- 主图:太极阴阳鱼 + 八卦环 SVG,由 JS 渲染 --></div>
+          <div class="bagua-detail" id="bagua-detail"><!-- 3/4 档详情面板,由 JS 渲染 --></div>
+        </div>
+        <div class="bagua-footer" id="bagua-footer"><!-- 今日卦摘要,由 JS 渲染 --></div>
+        <div class="bagua-ai-interp" id="bagua-ai-interp"><!-- 1/4、2/4、3/4 档 AI 解卦行,由 JS 渲染 --></div>
+      </div>
+      </div><!-- /页5 -->
+      </div><!-- /col-pages -->
+
+      <!-- 左侧纵向翻页圆点 -->
+      <div class="col-dots" id="col-dots"></div>
+    </aside>
+
+    <!-- ===== 中栏:收藏夹 ===== -->
+    <section class="col-center">
+      <section class="bookmarks">
+        <div class="bm-body">
+          <nav class="bm-nav" id="bm-nav" aria-label="收藏夹文件夹导航"><!-- 由 JS 渲染 --></nav>
+          <button class="bm-collapse-btn" id="bm-collapse-btn" title="收起 / 展开书签目录">◀</button>
+          <div class="bm-groups" id="bm-groups"><!-- 由 JS 渲染 --></div>
+        </div>
+        <div class="bm-empty" id="bm-empty" hidden>
+          正在加载收藏夹…
+        </div>
+        <button class="bm-top-btn" id="bm-top-btn" title="返回顶部">↑</button>
+      </section>
+    </section>
+
+    <!-- ===== 右栏:搜索框 + 快捷方式 ===== -->
+    <aside class="col-right">
+      <section class="quick-links">
+        <div class="ql-viewport" id="ql-viewport">
+          <div class="ql-grid ql-grid-prev" id="ql-grid-prev"><!-- 前一页:右拖时从左侧露出 --></div>
+          <div class="ql-grid" id="ql-grid"><!-- 当前页:由 JS 渲染 --></div>
+          <div class="ql-grid ql-grid-next" id="ql-grid-next"><!-- 下一页:拖动时从右侧露出 --></div>
+        </div>
+        <!-- 翻页控制:圆点指示器(固定在底部) -->
+        <div class="ql-pager">
+          <div class="ql-dots" id="ql-dots"><!-- 由 JS 渲染 --></div>
+        </div>
+      </section>
+    </aside>
+    </div>
+  </main>
+
+  <!-- 设置弹窗 -->
+  <dialog id="settings-dialog">
+    <form method="dialog" class="dialog-form settings-form">
+      <h3>设置</h3>
+      <div class="settings-tabs">
+        <button type="button" class="settings-tab active" data-tab="general">常规</button>
+        <button type="button" class="settings-tab" data-tab="appearance">外观</button>
+        <button type="button" class="settings-tab" data-tab="ai">AI</button>
+        <button type="button" class="settings-tab" data-tab="widgets">组件</button>
+        <button type="button" class="settings-tab" data-tab="data">数据</button>
+        <button type="button" class="settings-tab" data-tab="credits">鸣谢</button>
+      </div>
+      <div class="dialog-scroll">
+      <div class="tab-panel" data-panel="general">
+<label class="checkbox-row">
+        <input id="set-quick-name" type="checkbox" />
+        显示快捷方式名称
+      </label>
+      <label class="checkbox-row">
+        <input id="set-thumb-preview-bm" type="checkbox" />
+        显示书签网页预览弹窗
+      </label>
+      <label class="checkbox-row">
+        <input id="set-thumb-preview-ql" type="checkbox" />
+        显示快捷方式网页预览弹窗
+      </label>
+      <label class="checkbox-row">
+        <input id="set-fab-auto" type="checkbox" />
+        右上角控制按钮自动隐藏(平时隐藏,鼠标移到右上角时显示)
+      </label>
+      <label>
+        背景颜色(调色盘选择,设置后覆盖渐变与壁纸)
+        <div class="bgcolor-row">
+          <input type="color" id="set-bgcolor" value="#1e3c72" title="选择背景颜色" />
+          <button type="button" id="bgcolor-reset" class="alpha-default">恢复渐变</button>
+        </div>
+      </label>
+      </div>
+      <div class="tab-panel" data-panel="appearance" hidden>
+<div class="alpha-section">
+        <span class="alpha-title">各区域透明度与磨砂度</span>
+        <div class="alpha-grid2">
+          <div class="alpha-cell">
+            <span class="alpha-name">搜索栏</span>
+            <div class="alpha-item">
+              <input class="alpha-slider" data-key="search" type="range" min="0" max="40" step="1" />
+              <span class="alpha-value" data-label="search">10%</span>
+            </div>
+            <div class="alpha-item">
+              <input class="blur-slider" data-key="search" type="range" min="0" max="30" step="1" />
+              <span class="alpha-value" data-blur-label="search">12px</span>
+            </div>
+          </div>
+          <div class="alpha-cell">
+            <span class="alpha-name">左侧小组件</span>
+            <div class="alpha-item">
+              <input class="alpha-slider" data-key="widget" type="range" min="0" max="40" step="1" />
+              <span class="alpha-value" data-label="widget">10%</span>
+            </div>
+            <div class="alpha-item">
+              <input class="blur-slider" data-key="widget" type="range" min="0" max="30" step="1" />
+              <span class="alpha-value" data-blur-label="widget">12px</span>
+            </div>
+          </div>
+          <div class="alpha-cell">
+            <span class="alpha-name">收藏夹卡片</span>
+            <div class="alpha-item">
+              <input class="alpha-slider" data-key="bm" type="range" min="0" max="40" step="1" />
+              <span class="alpha-value" data-label="bm">8%</span>
+            </div>
+            <div class="alpha-item">
+              <input class="blur-slider" data-key="bm" type="range" min="0" max="30" step="1" />
+              <span class="alpha-value" data-blur-label="bm">10px</span>
+            </div>
+          </div>
+          <div class="alpha-cell">
+            <span class="alpha-name">快捷方式卡片</span>
+            <div class="alpha-item">
+              <input class="alpha-slider" data-key="ql" type="range" min="0" max="40" step="1" />
+              <span class="alpha-value" data-label="ql">8%</span>
+            </div>
+            <div class="alpha-item">
+              <input class="blur-slider" data-key="ql" type="range" min="0" max="30" step="1" />
+              <span class="alpha-value" data-blur-label="ql">8px</span>
+            </div>
+          </div>
+          <div class="alpha-cell">
+            <span class="alpha-name">最外层主卡片</span>
+            <div class="alpha-item">
+              <input class="alpha-slider" data-key="main" type="range" min="0" max="40" step="1" />
+              <span class="alpha-value" data-label="main">4%</span>
+            </div>
+            <div class="alpha-item">
+              <input class="blur-slider" data-key="main" type="range" min="0" max="30" step="1" />
+              <span class="alpha-value" data-blur-label="main">8px</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="alpha-section">
+        <span class="alpha-title">清爽模式背景蒙版(选中搜索栏时)</span>
+        <div class="alpha-grid2">
+          <div class="alpha-cell">
+            <span class="alpha-name">背景蒙版</span>
+            <div class="alpha-item">
+              <input class="clean-blur-slider" type="range" min="0" max="30" step="1" />
+              <span class="alpha-value" id="clean-blur-value">14px</span>
+            </div>
+            <div class="alpha-item">
+              <input class="clean-alpha-slider" type="range" min="0" max="100" step="1" />
+              <span class="alpha-value" id="clean-alpha-value">100%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      </div>
+      <div class="tab-panel" data-panel="ai" hidden>
+<p class="dialog-tip">
+        使用 <a href="https://platform.deepseek.com" target="_blank" rel="noopener">DeepSeek 开放平台</a>
+        的 API Key 为收藏夹生成简短标题与一句话简介(Key 仅保存在本机浏览器)。
+      </p>
+      <label>
+        DeepSeek API Key
+        <input id="set-key" type="password" placeholder="sk-…" autocomplete="off" />
+      </label>
+      <label>
+        API Base URL
+        <input id="set-base-url" type="text" placeholder="https://api.deepseek.com" spellcheck="false" autocomplete="off" />
+      </label>
+      <label>
+        模型名称(从接口获取列表)
+        <div class="model-row">
+          <select id="set-model" title="选择用于生成标题/简介的模型">
+            <option value="deepseek-chat">deepseek-chat</option>
+          </select>
+          <button type="button" id="btn-refresh-models" class="alpha-default" title="从接口获取模型列表">获取模型列表</button>
+          <button type="button" id="btn-gen-all" class="alpha-default" title="为缺少标题/简介的书签批量 AI 生成,生成进度显示在主页右上角">✨ 一键 AI 生成</button>
+        </div>
+      </label>
+      <label class="checkbox-row">
+        <input id="set-auto" type="checkbox" />
+        打开主页时自动为缺少标题/简介的书签生成
+      </label>
+      </div>
+      <div class="tab-panel" data-panel="widgets" hidden>
+        <p class="dialog-tip">设置各组件卡片的纵向高度档位(相对当前页卡片栏总高度,各卡档位按比例自动铺满整栏)。</p>
+        <div class="card-height-section">
+          <div class="card-height-head">
+            <span class="alpha-title">卡片高度</span>
+            <button type="button" id="btn-card-heights-reset-all" class="alpha-default" title="恢复所有卡片默认高度">全部默认</button>
+          </div>
+          <div class="card-height-list">
+          <div class="card-height-row"><span class="card-height-name">时间</span><button type="button" class="card-eye" data-card="clock-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="clock-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="clock-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">日历</span><button type="button" class="card-eye" data-card="calendar-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="calendar-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="calendar-card" title="恢复默认高度(2/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">名言警句</span><button type="button" class="card-eye" data-card="quote-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="quote-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="quote-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">地图</span><button type="button" class="card-eye" data-card="geo-map-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="geo-map-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="geo-map-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">天气</span><button type="button" class="card-eye" data-card="geo-weather-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="geo-weather-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="geo-weather-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">宠物</span><button type="button" class="card-eye" data-card="pet-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="pet-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="pet-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">白噪音</span><button type="button" class="card-eye" data-card="music-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="music-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="music-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">股票行情</span><button type="button" class="card-eye" data-card="stock-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="stock-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="stock-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">系统监控</span><button type="button" class="card-eye" data-card="monitor-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="monitor-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="monitor-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">今日热榜</span><button type="button" class="card-eye" data-card="hot-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="hot-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="hot-card" title="恢复默认高度(2/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">梦想之车</span><button type="button" class="card-eye" data-card="dreamcar-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="dreamcar-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="dreamcar-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">访问活跃度</span><button type="button" class="card-eye" data-card="activity-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="activity-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="activity-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">扑克牌</span><button type="button" class="card-eye" data-card="poker-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="poker-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="poker-card" title="恢复默认高度(1/4)">默认</button></div>
+          <div class="card-height-row"><span class="card-height-name">八卦罗盘</span><button type="button" class="card-eye" data-card="bagua-card" title="显示 / 隐藏组件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button><div class="card-height-opts" data-card="bagua-card"><button type="button" class="alpha-default" data-v="1">1/4</button><button type="button" class="alpha-default" data-v="2">2/4</button><button type="button" class="alpha-default" data-v="3">3/4</button><button type="button" class="alpha-default" data-v="4">4/4</button></div><button type="button" class="alpha-default card-height-reset" data-card="bagua-card" title="恢复默认高度(2/4)">默认</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="tab-panel" data-panel="data" hidden>
+        <p class="dialog-tip">导出当前全部配置(快捷方式/搜索引擎/AI 设置/外观/背景)为 JSON 文件,换设备或防丢失时可导入恢复。</p>
+        <button type="button" id="btn-export-config" class="alpha-default">⬇️ 导出配置</button>
+        <button type="button" id="btn-import-config" class="alpha-default">⬆️ 导入配置</button>
+      </div>
+      <div class="tab-panel" data-panel="credits" hidden>
+        <div class="donate-section">
+          <span class="alpha-title">☕ 捐助支持</span>
+          <p class="donate-tip">如果这个起始页对你有帮助,欢迎请开发者喝杯蜜雪冰城柠檬水 ❤️</p>
+          <div class="donate-qr">
+            <figure class="donate-item">
+              <img src="img/donate/wechat.jpg" alt="微信收款码" loading="lazy" />
+              <figcaption>微信</figcaption>
+            </figure>
+            <figure class="donate-item">
+              <img src="img/donate/alipay.jpg" alt="支付宝收款码" loading="lazy" />
+              <figcaption>支付宝</figcaption>
+            </figure>
+          </div>
+        </div>
+        <p class="dialog-tip">当前主页用到的所有外部接口及可用状态,特别鸣谢以下服务的支持:</p>
+        <div class="api-actions">
+          <button type="button" id="btn-api-recheck" class="alpha-default">🔄 重新检测</button>
+        </div>
+        <div class="api-list" id="api-list-body"><!-- 由 JS 渲染 --></div>
+      </div>
+</div><!-- /dialog-scroll -->
+      <div class="dialog-actions">
+        <button type="button" id="dialog-cancel" class="btn-ghost">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 维护卡片弹窗(⋯ 或点击失败提示打开) -->
+  <dialog id="maintain-dialog">
+    <form method="dialog" class="dialog-form">
+      <h3>维护卡片</h3>
+      <label>
+        链接(修改会同步到浏览器收藏夹)
+        <input id="maint-url" type="text" placeholder="https://…" />
+      </label>
+      <label>
+        标题(AI 生成或手动填写)
+        <input id="maint-title" type="text" maxlength="30" placeholder="简洁标题,≤14字为宜" />
+      </label>
+      <label>
+        一句话简介
+        <input id="maint-desc" type="text" maxlength="60" placeholder="一句话描述" />
+      </label>
+      <div class="dialog-actions dialog-actions-wrap">
+        <button type="button" id="maint-delete" class="btn-danger">删除书签</button>
+        <span class="dialog-spacer"></span>
+        <button type="button" id="maint-regenerate" class="btn-ghost">AI 重新生成</button>
+        <button type="button" id="maint-cancel" class="btn-ghost">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 添加/编辑搜索引擎弹窗 -->
+  <dialog id="engine-dialog">
+    <form method="dialog" class="dialog-form">
+      <h3 id="engine-dialog-title">添加搜索引擎</h3>
+      <label>
+        名称
+        <input id="engine-name" type="text" placeholder="例如:维基百科" required />
+      </label>
+      <label>
+        搜索链接(用 %s 表示关键词)
+        <input id="engine-url" type="text" placeholder="https://…search?q=%s" required />
+      </label>
+      <label>
+        图标地址(可选)
+        <input id="engine-icon" type="text" placeholder="https://…/favicon.ico" />
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="engine-dialog-cancel" class="btn-ghost">取消</button>
+        <button type="submit" id="engine-dialog-submit" class="btn-primary">添加</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 自选股管理弹窗(拖拽排序 + 输入代码新增 + 删除),样式参照搜索引擎管理 -->
+  <dialog id="stock-manage-dialog">
+    <div class="dialog-form">
+      <h3>自选股管理</h3>
+      <p class="dialog-tip">输入股票代码添加(如 600519 / sz000001),拖动行可调整排序,× 删除</p>
+      <div class="stock-manage-add">
+        <div class="stock-search-wrap">
+          <input id="stock-add-code" type="text" placeholder="输入名称或代码,如 茅台 / 600519" spellcheck="false" autocomplete="off" />
+          <div class="stock-suggest" id="stock-suggest" hidden><!-- 模糊搜索下拉:由 JS 渲染 --></div>
+        </div>
+        <button type="button" id="btn-add-stock" class="alpha-default">＋ 添加</button>
+      </div>
+      <div class="engine-manage-list" id="stock-manage-list"><!-- 由 JS 渲染 --></div>
+      <div class="dialog-actions">
+        <button type="button" id="stock-manage-close" class="btn-ghost">关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- A股大盘云图弹窗(内嵌 52etf.site 大盘云图) -->
+  <dialog id="stock-cloud-dialog">
+    <div class="dialog-form">
+      <h3>📊 A股大盘云图</h3>
+      <div class="cloud-frame" id="stock-cloud-frame">
+        <div class="cloud-loading" id="stock-cloud-loading">正在加载 52ETF 大盘云图…</div>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="stock-cloud-open" class="btn-ghost">↗ 打开完整版</button>
+        <button type="button" id="stock-cloud-close" class="btn-ghost">关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 搜索引擎管理弹窗(列表拖拽排序 + 设为当前 + 新增) -->
+  <dialog id="engine-manage-dialog">
+    <div class="dialog-form">
+      <h3>搜索引擎管理</h3>
+      <p class="dialog-tip">拖动行可调整排序;★ 设为当前搜索引擎</p>
+      <div class="engine-manage-list" id="engine-manage-list"><!-- 由 JS 渲染 --></div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-add-engine" class="btn-primary">＋ 添加搜索引擎</button>
+        <button type="button" id="engine-manage-close" class="btn-ghost">关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 清空搜索历史确认弹窗 -->
+  <dialog id="history-clear-confirm">
+    <div class="dialog-form">
+      <h3>清空历史记录</h3>
+      <p class="dialog-tip">确定要清空全部搜索历史记录吗?</p>
+      <div class="dialog-actions">
+        <button type="button" id="history-clear-cancel" class="btn-ghost">取消</button>
+        <button type="button" id="history-clear-ok" class="btn-danger">清空</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 删除书签确认弹窗 -->
+  <dialog id="confirm-dialog">
+    <div class="dialog-form">
+      <h3>删除书签</h3>
+      <p class="dialog-tip" id="confirm-text">确定要删除该书签吗?</p>
+      <div class="dialog-actions">
+        <button type="button" id="confirm-cancel" class="btn-ghost">取消</button>
+        <button type="button" id="confirm-ok" class="btn-danger">确认删除</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 添加快捷方式弹窗(添加/编辑两用) -->
+  <dialog id="quick-dialog">
+    <form method="dialog" class="dialog-form">
+      <h3 id="quick-dialog-title">添加快捷方式</h3>
+      <label>
+        名称
+        <input id="quick-name" type="text" placeholder="例如:哔哩哔哩" required />
+      </label>
+      <label>
+        网址
+        <input id="quick-url" type="text" placeholder="baidu.com 或 https://…" required />
+      </label>
+      <label>
+        emoji 图标(可选)
+        <input id="quick-icon" type="text" placeholder="例如:📺" />
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="quick-cancel" class="btn-ghost">取消</button>
+        <button type="submit" id="quick-submit" class="btn-primary">添加</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 天气效果粒子层(由天气卡片开关控制) -->
+  <div class="weather-effect" id="weather-effect" aria-hidden="true"></div>
+
+  <!-- 右上角模式切换 + 设置按钮 + AI 生成进度 -->
+  <div class="top-right-bar">
+    <span class="gen-progress" id="gen-progress" hidden></span>
+    <button class="mode-fab" id="btn-mode" title="切换为清爽模式">
+      <!-- 网格模式(田字格) -->
+      <svg id="mode-icon-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect width="18" height="18" x="3" y="3" rx="3" />
+        <path d="M3 12h18" />
+        <path d="M12 3v18" />
+      </svg>
+      <!-- 清爽模式(叶子) -->
+      <svg id="mode-icon-clean" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+        <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
+        <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+      </svg>
+    </button>
+    <button class="settings-fab" id="btn-settings" title="设置(DeepSeek API Key)">
+      <!-- 齿轮图标 -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+      </svg>
+    </button>
+  </div>
+
+  <!-- 右下角风车:叶片旋转 + 更换背景;白色手柄独立于按钮,确保在风车图形下层 -->
+  <button class="windmill-btn" id="windmill-btn" title="更换背景">
+    <!-- 风车叶片图由 main.js initWindmill 运行时创建(清爽模式零媒体静态引用,见 AGENTS.md 规范) -->
+    <span class="windmill-wrap"></span>
+  </button>
+  <span class="windmill-handle"></span>
+
+  <!-- 网格资源门控:必须最先加载(外部文件,MV3 CSP 禁止内联 script) -->
+  <script src="js/gridgate.js"></script>
+  <!-- activity.js 保留:记录主页访问(清爽模式也算访问),渲染由门控延迟到网格模式 -->
+  <script src="js/activity.js"></script>
+  <!-- 其余组件脚本(日历/分页/宠物/音乐/监控/热榜/股票/梦想之车/扑克牌)在网格模式下动态加载,清爽模式不下载 -->
+  <script src="js/main.js"></script>
+  <!-- 鸣谢页付款码放大预览(lightbox):用 dialog 进入 top layer,确保在最上层 -->
+  <dialog class="donate-zoom" id="donate-zoom">
+    <img id="donate-zoom-img" src="" alt="收款码" />
+  </dialog>
+  <!-- 综合罗盘(23 环旋转)放大预览:点击八卦罗盘卡 ☯ 打开;SVG 由 compass.js 渲染,清爽模式不注入 -->
+  <dialog class="evo-zoom" id="evo-zoom">
+    <div class="dialog-form">
+      <h3>🧭 综合罗盘</h3>
+      <div class="evo-frame">
+        <svg id="evo-chart" viewBox="140 140 2120 2120"></svg>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="evo-zoom-close" class="btn-ghost">关闭</button>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>

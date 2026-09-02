@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "icons": {
+    "16": "img/icon16.png",
+    "48": "img/icon48.png",
+    "128": "img/icon128.png"
+  },
+  "name": "香蕉起始页",
+  "version": "1.4.0",
+  "description": "覆盖新标签页:实时同步 Chrome 收藏夹(卡片式 + AI 标题/简介 + 悬浮缩略图)、快捷方式、时钟、IP 定位与天气、多引擎搜索。",
+  "permissions": [
+    "system.cpu",
+    "system.memory",
+    "bookmarks",
+    "storage",
+    "unlimitedStorage",
+    "favicon",
+    "geolocation"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "chrome_url_overrides": {
+    "newtab": "index.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
