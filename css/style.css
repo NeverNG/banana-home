@@ -12,6 +12,8 @@
   --text-dim: #ffffff;
   --text-faint: #ffffff;
   --accent: #6c8cff;
+  /* 全局字体灰色阴影（两层：贴边投影 + 柔和扩散） */
+  --text-shadow: 0 1px 2px rgba(90, 92, 98, 0.75), 0 0 8px rgba(90, 92, 98, 0.45);
 }
 
 html,
@@ -22,7 +24,17 @@ body {
 body {
   font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   color: var(--text);
+  /* 全局字体灰色阴影（text-shadow 可继承，子元素自动生效） */
+  text-shadow: var(--text-shadow);
   overflow: hidden;
+}
+
+/* 表单控件不继承 text-shadow（UA 样式重置为 none），单独补齐，保证「全局」生效 */
+input,
+textarea,
+select,
+button {
+  text-shadow: var(--text-shadow);
 }
 
 /* ===== 动态渐变背景 ===== */
@@ -167,7 +179,7 @@ body:not(.mode-clean) .main-row {
   font-size: 52px;
   font-weight: 300;
   letter-spacing: 4px;
-  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.35);
+  text-shadow: var(--text-shadow), 0 2px 20px rgba(0, 0, 0, 0.35);
   line-height: 1.1;
 }
 
@@ -224,6 +236,7 @@ body:not(.mode-clean) .main-row {
 
 .search-bar select option {
   color: #222;
+  text-shadow: none; /* 深色文字/浅色底:不加灰色阴影,保持清晰 */
 }
 
 .search-bar input {
@@ -2217,6 +2230,7 @@ body.no-anim .main-row {
   background: rgba(255, 255, 255, 0.92);
   color: #1a2b4d;
   font-weight: 700;
+  text-shadow: none; /* 浅色高亮底 + 深色文字:去掉灰色阴影 */
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 
@@ -2848,6 +2862,7 @@ body.no-anim .main-row {
   background: linear-gradient(160deg, #ffffff, #eef0f5);
   border-radius: 10px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  text-shadow: none; /* 白底扑克牌:深色花色不加灰色阴影 */
   user-select: none;
 }
 
