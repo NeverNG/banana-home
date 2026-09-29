@@ -23,6 +23,14 @@ body {
   font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   color: var(--text);
   overflow: hidden;
+  /* 全局文字阴影:背景图颜色多变时保证文字可读性(后代显式 text-shadow 声明会覆盖此继承值) */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+/* SVG 图形不吃文本阴影(避免图标/地图瓦片发虚);天气粒子等纯装饰元素除外 */
+svg, svg *,
+.sun-particle, .cloud-puff, .leaf, .rain-drop, .snowflake {
+  text-shadow: none;
 }
 
 /* ===== 动态渐变背景 ===== */
