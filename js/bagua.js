@@ -13,7 +13,9 @@
  * - 今日卦:日期种子确定性选取(当日不变,次日更换)。
  * - 交互:点击卦位查看详情,🎲 随机起一卦,点击太极恢复今日卦。
  * - 时辰徽章:当前十二时辰 + 五行,30s 检查跨时/跨天。
- * - 纯本地计算:无网络请求、无存储读写;由网格门控注入,清爽模式不加载。
+ * - 盘面/详情/时辰为纯本地计算;仅「AI 解卦」一行经后台消息调用用户配置的
+ *   AI 服务(与名言释义同一份设置 → AI),结果缓存在 chrome.storage.session。
+ *   由网格门控注入,清爽模式不加载。
  * ======================================================== */
 
 /* 后天八卦(罗盘方位:上南下北,顺时针从顶部南开始)。
@@ -231,41 +233,86 @@ function escHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-/** AI 解卦:按卦象调用 DeepSeek 生成简短解读(会话级缓存,8 卦各一条) */
+/** AI 解卦:按卦象调用后台 DeepSeek 生成简短解读(会话级缓存,8 卦各一条)。
+ *  与名言释义走同一份 AI 设置(设置 → AI 的 Key / Base URL / 模型),不存在第二份配置。
+ *  容错(对齐名言卡的实现):消息通道异常自动重试(最多 3 次)、25s 超时兜底,
+ *  并区分 no-key / empty / failed / 后台无响应——不再把任何异常都笼统报成「AI 服务未就绪」。 */
 let guaciSeq = 0; // 请求序号:防快速切换时旧响应覆盖新卦
 function loadGuaci(gua) {
   const el = document.getElementById("bagua-ai-interp");
   if (!el) return;
   const cacheKey = "guaci-" + gua.name;
   const mySeq = ++guaciSeq;
+  const alive = () => mySeq === guaciSeq; // 已有更新的选择:旧请求作废
+  const show = (s) => { if (alive()) el.innerHTML = "<b>解卦：</b>" + s; };
+  let lastErr = ""; // 最近一次消息通道错误(诊断用)
+
+  /** 终态渲染:后台四态 → 对应文案 */
+  const render = (res) => {
+    if (!alive()) return;
+    if (res && res.status === "ok" && res.text) {
+      show(escHtml(res.text));
+      try { chrome.storage.session.set({ [cacheKey]: res.text }); } catch (e) { /* 忽略 */ }
+      return;
+    }
+    if (res && res.status === "no-key") {
+      show("未配置 AI Key（设置 → AI → DeepSeek API Key）");
+      return;
+    }
+    if (res && res.status === "empty") {
+      // 200 但正文为空:多为推理模型/不支持的模型名,给出可操作提示
+      show("AI 返回空内容" + (res.detail ? "（" + escHtml(res.detail) + "）" : "") +
+        "，请在 设置 → AI 中改用 deepseek-chat 等对话模型后重试");
+      return;
+    }
+    if (res && res.status === "failed") {
+      show("AI 生成失败" + (res.detail ? "（" + escHtml(res.detail) + "）" : "") +
+        "，请检查 API Key / 模型 / 网络后重试");
+      return;
+    }
+    // 无有效响应:后台未处理该消息(后台脚本版本过旧)或消息通道被关闭
+    show("后台未响应" + (lastErr ? "（" + escHtml(lastErr) + "）" : "") +
+      "，请到 chrome://extensions 点「重新加载」扩展后重试");
+  };
+
+  /** 发送请求;无有效响应时退避重试(首次调用后台/后台唤醒期间易出现通道未就绪) */
+  const send = (attempt) => {
+    if (!alive()) return;
+    let done = false;
+    const reply = (res) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      // 无有效响应(undefined 或缺少 status)视为可重试:端口关闭/后台重启
+      const invalid = !res || typeof res.status !== "string";
+      if (invalid && attempt < 3) { setTimeout(() => send(attempt + 1), 800); return; }
+      render(res);
+    };
+    const timer = setTimeout(() => reply(null), 25000); // 兜底:绝不永远停在「生成中…」
+    try {
+      chrome.runtime.sendMessage({ type: "askGuaci", gua: guaInfoText(gua) }, (res) => {
+        const le = chrome.runtime.lastError; // 真实 Chrome 为 { message } 对象,容错兼容字符串
+        if (le) lastErr = String(le.message || le || "");
+        reply(res);
+      });
+    } catch (e) {
+      lastErr = String((e && e.message) || e);
+      reply(null);
+    }
+  };
+
+  const start = () => { show("生成中…"); send(1); };
   try {
-    chrome.storage.session.get(cacheKey).then((r) => {
-      if (mySeq !== guaciSeq) return; // 已有更新的选择
-      if (r && r[cacheKey]) {
-        el.innerHTML = '<b>解卦：</b>' + escHtml(r[cacheKey]);
-        return;
-      }
-      el.innerHTML = "<b>解卦：</b>生成中…";
-      try {
-        chrome.runtime.sendMessage({ type: "askGuaci", gua: guaInfoText(gua) }, (res) => {
-          if (mySeq !== guaciSeq) return; // 旧请求结果丢弃
-          if (res && res.status === "ok" && res.text) {
-            el.innerHTML = "<b>解卦：</b>" + escHtml(res.text);
-            try { chrome.storage.session.set({ [cacheKey]: res.text }); } catch (e) { /* 忽略 */ }
-          } else if (res && res.status === "no-key") {
-            el.innerHTML = "<b>解卦：</b>未配置 AI Key（设置 → AI → DeepSeek API Key）";
-          } else if (res && res.status === "failed") {
-            el.innerHTML = "<b>解卦：</b>AI 生成失败，请检查 DeepSeek API Key 与网络后重试";
-          } else {
-            // 回调无有效响应:大概率扩展未重载(background 旧代码未注册 askGuaci)
-            el.innerHTML = "<b>解卦：</b>AI 服务未就绪，请重新加载扩展后重试";
-          }
-        });
-      } catch (e) {
-        el.innerHTML = "<b>解卦：</b>未配置 AI Key（设置 → AI → DeepSeek API Key）";
-      }
-    }).catch(() => { /* 忽略 */ });
-  } catch (e) { /* 忽略 */ }
+    if (chrome.storage.session && chrome.storage.session.get) {
+      chrome.storage.session.get(cacheKey).then((r) => {
+        if (!alive()) return;
+        if (r && r[cacheKey]) { show(escHtml(r[cacheKey])); return; } // 缓存命中
+        start();
+      }).catch(start); // 会话缓存不可用:直接请求,不卡住
+    } else {
+      start();
+    }
+  } catch (e) { start(); }
 }
 
 /** 卦象信息文本(供 AI 解卦 prompt) */

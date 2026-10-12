@@ -188,7 +188,12 @@ function noiseRender() {
   document.documentElement.style.setProperty("--noise-accent", n.color);
   const toggle = document.getElementById("music-toggle");
   if (toggle) {
-    toggle.textContent = noise.playing ? "⏸" : "▶";
+    // 图标切换:播放/暂停两个 SVG 用 hidden 属性互换(路径数据只在 HTML 维护一份)。
+    // 注意:SVG 元素没有 HTMLElement 的 hidden IDL 属性,必须用 toggleAttribute 真正改属性
+    const ip = toggle.querySelector(".ico-play");
+    const iz = toggle.querySelector(".ico-pause");
+    if (ip) ip.toggleAttribute("hidden", !!noise.playing);
+    if (iz) iz.toggleAttribute("hidden", !noise.playing);
     toggle.title = noise.playing ? "暂停" : "播放";
   }
 }
@@ -311,7 +316,7 @@ function initMusic() {
         noiseResume();
       } else if (r[NOISE_PLAYING_KEY] === true) {
         // 上次在播放:尝试续播。受浏览器自动播放策略限制,无用户手势会被拒绝。
-        // 此时仅把 UI 置为暂停(实际无声,按钮显示 ▶);**不回写 storage**,
+        // 此时仅把 UI 置为暂停(实际无声,按钮显示 ▶️);**不回写 storage**,
         // 保留"上次播放中"的真实记录(导出配置/下次刷新仍可见并会再次尝试)。
         noiseEnsureSrc(); // 确保音频 src 为当前音效(换过音效时重新加载,避免播放默认雨声)
         noise.audio.play().catch(() => {

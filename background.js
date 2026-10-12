@@ -139,86 +139,148 @@ async function getDeepSeekModels(key, baseUrl) {
   }
 }
 
-/** AI 生成名言解释(用配置的 DeepSeek) */
-async function explainQuote(text, from) {
-  const key = await getApiKey();
-  if (!key) return { status: "no-key", explain: "" };
+/* ===== 统一 AI 对话内核:名言释义 / 八卦解卦 / 书签标题简介 共用同一份 AI 设置 =====
+ * 配置只有一个来源:设置 → AI(chrome.storage.local 的 deepseekApiKey / baseUrl / model)。
+ * 各卡片不存在独立的第二份 AI 配置;此处集中解析,避免各调用点各写一遍而出现分叉。 */
+async function resolveAiConfig(overrides) {
+  const o = overrides || {};
+  const key = o.key || (await getApiKey());
+  if (!key) return { key: null };
   let baseUrl = "https://api.deepseek.com";
-  let model = "deepseek-chat";
+  let model = MODEL;
   try {
     const r = await chrome.storage.local.get(["baseUrl", "model"]);
     if (r && r.baseUrl) baseUrl = r.baseUrl;
     if (r && r.model) model = r.model;
   } catch (e) { /* 忽略 */ }
-  const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15000);
-  try {
-    const resp = await fetch(url, {
-      method: "POST",
-      signal: ctrl.signal,
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: "你是名言解释助手。用简洁中文(60字以内)解释这句名言的含义与启发,直接输出解释内容,不要前缀、不要引号。" },
-          { role: "user", content: text + (from ? "\n出处:" + from : "") },
-        ],
-        max_tokens: 150,
-      }),
-    });
-    clearTimeout(timer);
-    if (!resp.ok) return { status: "failed", explain: "" };
-    const data = await resp.json();
-    const explain = (
-      (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || ""
-    ).trim();
-    return { status: explain ? "ok" : "failed", explain };
-  } catch (e) {
-    clearTimeout(timer);
-    return { status: "failed", explain: "" };
-  }
+  if (o.baseUrl) baseUrl = o.baseUrl;
+  if (o.model) model = o.model;
+  return { key, url: buildChatUrl(baseUrl), model };
 }
 
-/** AI 生成卦象解卦(用配置的 DeepSeek):按卦象信息生成简短今日解读 */
-async function generateGuaci(gua, model, baseUrl) {
-  const key = await getApiKey();
-  if (!key) return { status: "no-key", text: "" };
-  let bUrl = "https://api.deepseek.com", mdl = "deepseek-chat";
+/** 思考模式抑制参数:仅对 DeepSeek 官方域名发送(第三方 OpenAI 兼容网关可能不识别 thinking 字段)。
+ *  短文案任务(释义/解卦/标题简介)不需要思维链——思考模式下思维链与正文共享 max_tokens 预算,
+ *  小上限会被思维链吃光,导致 content 为空且 finish_reason="length"。 */
+function thinkingOff(baseUrl) {
+  let host = "";
   try {
-    const r = await chrome.storage.local.get(["baseUrl", "model"]);
-    if (r && r.baseUrl) bUrl = r.baseUrl;
-    if (r && r.model) mdl = r.model;
-  } catch (e) { /* 忽略 */ }
-  if (model) mdl = model;
-  if (baseUrl) bUrl = baseUrl;
-  const url = buildChatUrl(bUrl); /* 复用:已含 /chat/completions 不重复拼接 */
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15000);
-  try {
-    const resp = await fetch(url, {
-      method: "POST",
-      signal: ctrl.signal,
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
-      body: JSON.stringify({
-        model: mdl,
-        messages: [
-          { role: "system", content: "你是周易解卦助手。根据给出的卦象信息,用简洁中文(50字以内)给出一条贴合卦象的解读与建议,直接输出解读内容,不要前缀、不要重复卦名、不要引号。" },
-          { role: "user", content: "卦象信息:" + gua },
-        ],
-        max_tokens: 150,
-        temperature: 0.8,
-      }),
-    });
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const data = await resp.json();
-    const text = (data?.choices?.[0]?.message?.content || "").trim();
-    return text ? { status: "ok", text } : { status: "empty" };
+    host = new URL(String(baseUrl || "")).hostname;
   } catch (e) {
-    return { status: "failed" };
-  } finally {
-    clearTimeout(timer);
+    host = String(baseUrl || "").replace(/^https?:\/\//i, "").split(/[/?#]/)[0];
   }
+  return /(^|\.)deepseek\.com$/i.test(host) ? { thinking: { type: "disabled" } } : {};
+}
+
+/**
+ * 统一 chat/completions 调用。返回四态(带可诊断细节):
+ *   { status:"ok", text, finishReason }
+ *   { status:"no-key" }                        未配置 API Key
+ *   { status:"empty", detail }                 HTTP 200 但正文为空(思维链占满预算/输出被截断)
+ *   { status:"failed", detail }                HTTP 错误 / 超时 / 网络异常(detail 为具体原因)
+ * 不传 maxTokens 时不写 max_tokens,由服务端取默认上限(避免小上限被思维链吃光)。
+ */
+async function aiChat(opts) {
+  const o = opts || {};
+  const cfg = await resolveAiConfig({ model: o.model, baseUrl: o.baseUrl });
+  if (!cfg.key) return { status: "no-key" };
+  registerApi(o.name || "DeepSeek API", o.desc || "AI 生成", cfg.url);
+
+  const payload = { model: cfg.model, messages: o.messages || [] };
+  if (o.maxTokens) payload.max_tokens = o.maxTokens;
+  if (typeof o.temperature === "number") payload.temperature = o.temperature;
+  const brief = !!o.brief;
+  const thinkOff = brief ? thinkingOff(o.baseUrl || "") : {};
+
+  /** 单次请求 */
+  const post = async (body) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), o.timeoutMs || 15000);
+    try {
+      const resp = await fetch(cfg.url, {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + cfg.key },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) return { status: "failed", detail: "HTTP " + resp.status, httpStatus: resp.status };
+      const data = await resp.json();
+      const choice = (data && data.choices && data.choices[0]) || {};
+      const text = ((choice.message && choice.message.content) || "").trim();
+      const finishReason = choice.finish_reason || "";
+      if (!text) {
+        // 200 但正文为空:通常是思维链把输出预算用完,或模型名不被支持
+        const rt = data && data.usage && data.usage.completion_tokens_details
+          ? data.usage.completion_tokens_details.reasoning_tokens : 0;
+        return {
+          status: "empty",
+          finishReason,
+          detail: finishReason === "length"
+            ? "输出预算被用尽" + (rt ? "（思维链 reasoning_tokens=" + rt + "）" : "")
+            : finishReason ? "finish_reason=" + finishReason : "模型返回空内容",
+        };
+      }
+      return { status: "ok", text, finishReason };
+    } catch (e) {
+      const detail = e && e.name === "AbortError" ? "请求超时" : (e && e.message ? e.message : "网络错误");
+      return { status: "failed", detail };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const first = await post(Object.assign({}, payload, thinkOff));
+  if (first.status === "ok" || first.status === "no-key") return first;
+  // 回退①:服务端不认识 thinking 字段(400)→ 去掉该字段重发
+  if (first.httpStatus === 400 && thinkOff.thinking) {
+    const r2 = await post(Object.assign({}, payload));
+    return r2.status === "ok" ? r2 : first;
+  }
+  // 回退②:思维链吃光输出预算(空正文 + length)→ 保留 thinking 关闭、去掉 max_tokens 重发
+  if (first.status === "empty" && first.finishReason === "length" && payload.max_tokens) {
+    const relaxed = Object.assign({}, payload, thinkOff);
+    delete relaxed.max_tokens;
+    const r2 = await post(relaxed);
+    return r2.status === "ok" ? r2 : first;
+  }
+  return first;
+}
+
+/** AI 生成名言解释(与八卦解卦共用 aiChat 与同一份 AI 设置) */
+async function explainQuote(text, from) {
+  const r = await aiChat({
+    messages: [
+      { role: "system", content: "你是名言解释助手。用简洁中文(60字以内)解释这句名言的含义与启发,直接输出解释内容,不要前缀、不要引号。" },
+      { role: "user", content: text + (from ? "\n出处:" + from : "") },
+    ],
+    timeoutMs: 15000,
+    brief: true, // 短文案:关闭思考模式、不设小 max_tokens
+    name: "DeepSeek API",
+    desc: "AI 释义(名言警句)",
+  });
+  // 正文为空对名言卡等同失败(保持原三态契约),detail 供页面提示原因
+  return {
+    status: r.status === "empty" ? "failed" : r.status,
+    explain: r.text || "",
+    detail: r.detail || "",
+  };
+}
+
+/** AI 生成卦象解卦(与名言释义共用 aiChat 与同一份 AI 设置):按卦象信息生成简短解读 */
+async function generateGuaci(gua, model, baseUrl) {
+  const r = await aiChat({
+    messages: [
+      { role: "system", content: "你是周易解卦助手。根据给出的卦象信息,用简洁中文(50字以内)给出一条贴合卦象的解读与建议,直接输出解读内容,不要前缀、不要重复卦名、不要引号。" },
+      { role: "user", content: "卦象信息:" + gua },
+    ],
+    temperature: 0.8,
+    timeoutMs: 15000,
+    brief: true, // 短文案:关闭思考模式、不设小 max_tokens
+    name: "DeepSeek API",
+    desc: "AI 解卦(八卦罗盘)",
+    model,
+    baseUrl,
+  });
+  return { status: r.status, text: r.text || "", detail: r.detail || "" };
 }
 
 /** 根据用户配置的 base_url 拼出 chat/completions 地址 */
@@ -257,8 +319,9 @@ async function askDeepSeek(pageText, title, model, baseUrl) {
           },
           { role: "user", content: `网页原标题:${title}\n网页正文:${pageText}` },
         ],
-        max_tokens: 200,
+        // 不设小 max_tokens:思考模式下思维链与正文共享输出预算,上限太小会只出思维链、正文为空
         temperature: 0.3,
+        ...thinkingOff(buildChatUrl(baseUrl)),
       }),
     });
     if (!resp.ok) throw new Error(`API HTTP ${resp.status}`);

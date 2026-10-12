@@ -50,9 +50,9 @@
           <div class="cal-header">
             <div class="cal-title" id="cal-title">…</div>
             <span class="cal-nav-group">
-              <button type="button" class="cal-nav" id="cal-prev" title="上个月">‹</button>
-              <button type="button" class="cal-nav" id="cal-next" title="下个月">›</button>
-              <button type="button" class="cal-today" id="cal-today" title="回到今天">今</button>
+              <button type="button" class="cal-nav" id="cal-prev" title="上个月"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.6 5.4 8 12l6.6 6.6"/></svg></button>
+              <button type="button" class="cal-nav" id="cal-next" title="下个月"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.4 5.4 16 12l-6.6 6.6"/></svg></button>
+              <button type="button" class="cal-today" id="cal-today" title="回到今天"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.8h17M8 3.2v3.6M16 3.2v3.6"/><circle cx="12" cy="14.8" r="1.5" fill="currentColor" stroke="none"/></svg></button>
             </span>
           </div>
           <div class="cal-week">
@@ -72,7 +72,22 @@
 
       <div class="col-page">
       <!-- 地图卡片(独立) -->
-      <div class="map-card" id="geo-map-card" title="点击使用浏览器精确定位">
+      <div class="map-card" id="geo-map-card" title="进入页面自动精确定位">
+        <!-- 标题栏:卡片图标 + 卡片名称 + 功能按钮(与其它卡片头部一致) -->
+        <div class="widget-head">
+          <span class="widget-title"><span class="title-icon">📍</span> 当前位置</span>
+          <span class="widget-actions">
+            <a
+              class="mini-btn map-amap"
+              id="map-amap"
+              href="https://www.amap.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="在新标签页用高德地图打开当前位置"
+            ><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.4v3.9M12 17.7v3.9M2.4 12h3.9M17.7 12h3.9"/></svg></a>
+          </span>
+        </div>
+        <!-- 地图栏:高德瓦片地图(位置/坐标标签已移除,城市名由地图内标记标签展示) -->
         <div class="geo-map-wrap">
           <iframe
             class="geo-map"
@@ -82,8 +97,6 @@
             frameborder="0"
             title="当前位置地图"
           ></iframe>
-          <!-- 当前坐标标题(卡片左上角) -->
-          <div class="map-title" id="map-title"></div>
         </div>
         <!-- 定位状态提示(卡片内) -->
         <div class="map-tip" id="map-tip" hidden></div>
@@ -94,7 +107,7 @@
         <div class="widget-head">
           <span class="widget-title"><span class="title-icon">🌤</span> 天气情况</span>
           <span class="widget-actions">
-            <button class="mini-btn weather-effect-toggle" id="weather-effect-toggle" title="跟随当前位置天气显示页面效果(晴/多云/刮风/雨/雪)">⛅</button>
+            <button class="mini-btn weather-effect-toggle" id="weather-effect-toggle" title="跟随当前位置天气显示页面效果(晴/多云/刮风/雨/雪)"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.9" cy="6.7" r="2.5"/><path d="M6.9 1.7v1.5M1.9 6.7h1.5M3.4 3.2l1.1 1.1M10.4 3.2 9.3 4.3"/><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg></button>
           </span>
         </div>
         <div class="weather-display" id="weather-display">
@@ -112,8 +125,8 @@
         <div class="pet-head">
           <span class="pet-title"><span class="title-icon">🐾</span> 桌面宠物</span>
           <span class="pet-actions">
-            <button type="button" id="pet-switch" class="pet-btn" title="切换宠物">🐾</button>
-            <button type="button" id="pet-feed" class="pet-btn" title="喂食">🍪</button>
+            <button type="button" id="pet-switch" class="pet-btn" title="切换宠物"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="7.2" cy="7.8" rx="1.9" ry="2.4"/><ellipse cx="12" cy="6.4" rx="1.9" ry="2.5"/><ellipse cx="16.8" cy="7.8" rx="1.9" ry="2.4"/><path d="M12 11.2c3.1 0 5.6 2.1 5.6 4.6 0 1.9-1.5 3.1-3.2 3.1-.9 0-1.6-.4-2.4-.4s-1.5.4-2.4.4c-1.7 0-3.2-1.2-3.2-3.1 0-2.5 2.5-4.6 5.6-4.6z"/></svg></button>
+            <button type="button" id="pet-feed" class="pet-btn" title="喂食"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><circle cx="9" cy="9.6" r="1.25" fill="currentColor" stroke="none"/><circle cx="14.6" cy="10.2" r="1.05" fill="currentColor" stroke="none"/><circle cx="10" cy="14.6" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.2" cy="15" r="1.35" fill="currentColor" stroke="none"/></svg></button>
           </span>
         </div>
         <div class="pet-stage" id="pet-stage">
@@ -138,9 +151,9 @@
           <span class="music-time" id="music-time-dur">0:00</span>
         </div>
         <div class="music-controls">
-          <button type="button" id="music-prev" class="music-btn" title="上一个音效">⏮</button>
-          <button type="button" id="music-toggle" class="music-btn music-play" title="播放">▶</button>
-          <button type="button" id="music-next" class="music-btn" title="下一个音效">⏭</button>
+          <button type="button" id="music-prev" class="music-btn" title="上一个音效"><svg class="card-ico ico-filled" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.4 5.8v12.4L9.7 12z"/><rect x="5.4" y="5.6" width="2.3" height="12.8" rx="1"/></svg></button>
+          <button type="button" id="music-toggle" class="music-btn music-play" title="播放"><svg class="card-ico ico-filled ico-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 5.6v12.8L19 12z"/></svg><svg class="card-ico ico-filled ico-pause" viewBox="0 0 24 24" aria-hidden="true" hidden><rect x="8" y="5.5" width="3.1" height="13" rx="1"/><rect x="12.9" y="5.5" width="3.1" height="13" rx="1"/></svg></button>
+          <button type="button" id="music-next" class="music-btn" title="下一个音效"><svg class="card-ico ico-filled" viewBox="0 0 24 24" aria-hidden="true"><path d="M5.6 5.8v12.4L14.3 12z"/><rect x="16.3" y="5.6" width="2.3" height="12.8" rx="1"/></svg></button>
         </div>
       </div>
 
@@ -150,8 +163,8 @@
           <span class="widget-title"><span class="title-icon">📈</span> 股票行情</span>
           <span class="widget-actions">
             <span class="widget-update" id="stock-update"></span>
-            <button type="button" id="stock-cloud-btn" class="mini-btn" title="A股大盘云图">🔍</button>
-            <button type="button" id="stock-manage-btn" class="mini-btn" title="管理自选股">⋮</button>
+            <button type="button" id="stock-cloud-btn" class="mini-btn" title="A股大盘云图"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4"/><path d="M15.6 15.6 21 21"/></svg></button>
+            <button type="button" id="stock-manage-btn" class="mini-btn" title="管理自选股"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.2h4.6M14.4 7.2H20M4 16.8h5.6M15.4 16.8H20"/><circle cx="11.6" cy="7.2" r="2.4"/><circle cx="12.6" cy="16.8" r="2.4"/></svg></button>
           </span>
         </div>
         <div class="stock-list" id="stock-list"><div class="widget-empty">加载中…</div></div>
@@ -200,7 +213,7 @@
         <div class="widget-head">
           <span class="widget-title"><span class="title-icon">🚗</span> 梦想之车</span>
           <span class="widget-actions">
-            <button type="button" id="dc-auto" class="mini-btn dreamcar-auto" title="自动旋转 / 停止">▶</button>
+            <button type="button" id="dc-auto" class="mini-btn dreamcar-auto" title="自动旋转 / 停止"><svg class="card-ico ico-filled ico-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 5.6v12.8L19 12z"/></svg><svg class="card-ico ico-filled ico-pause" viewBox="0 0 24 24" aria-hidden="true" hidden><rect x="8" y="5.5" width="3.1" height="13" rx="1"/><rect x="12.9" y="5.5" width="3.1" height="13" rx="1"/></svg></button>
           </span>
         </div>
         <!-- 品牌 / 车系 联动下拉(仿 antd Select 交互) -->
@@ -256,8 +269,8 @@
           <span class="widget-title"><span class="title-icon">🧭</span> 八卦罗盘</span>
           <span class="widget-actions">
             <span class="bagua-shichen" id="bagua-shichen" title="当前时辰">--</span>
-            <button type="button" id="bagua-chart" class="mini-btn" title="罗盘">☯</button>
-            <button type="button" id="bagua-rand" class="mini-btn" title="随机起一卦">🎲</button>
+            <button type="button" id="bagua-chart" class="mini-btn" title="罗盘"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a4.5 4.5 0 0 1 0 9 4.5 4.5 0 0 0 0 9"/><circle cx="12" cy="7.5" r="1.25" fill="currentColor" stroke="none"/><circle cx="12" cy="16.5" r="1.25"/></svg></button>
+            <button type="button" id="bagua-rand" class="mini-btn" title="随机起一卦"><svg class="card-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.6" y="3.6" width="16.8" height="16.8" rx="3.6"/><circle cx="8.6" cy="8.6" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.4" cy="15.4" r="1.4" fill="currentColor" stroke="none"/></svg></button>
           </span>
         </div>
         <div class="bagua-stage" id="bagua-stage">

@@ -1965,7 +1965,9 @@ async function explainQuoteText(text, from) {
           return;
         }
         if (!res || res.status !== "ok" || !res.explain) {
-          box.textContent = res && res.status === "no-key" ? "释义:未配置 API Key" : "释义:生成失败";
+          // detail 为后台返回的具体原因(如 HTTP 401 / 请求超时),便于定位 Key/模型/网络问题
+          const why = res && res.detail ? "(" + res.detail + ")" : "";
+          box.textContent = res && res.status === "no-key" ? "释义:未配置 API Key" : "释义:生成失败" + why;
           box.hidden = false;
           return;
         }
@@ -2612,26 +2614,83 @@ window.onCardHeight && window.onCardHeight(function () {
   if (c && c.dataset.height && lastWeatherData) renderWeather(lastWeatherData);
 });
 
+/* ===== 坐标系换算:WGS-84 → GCJ-02(火星坐标) =====
+ * 浏览器 geolocation 与 IP 定位(ip-api)给出的都是 WGS-84;而高德瓦片、高德地图
+ * 都是 GCJ-02。不做换算直接把 WGS-84 坐标喂给高德,标记会整体偏移约 300~600m
+ * (北京约 +0.0060 经度 / +0.0014 纬度)。算法取自经典 EvilTransform(WGS2GCJTransform):
+ * 克拉索夫斯基椭球 a=6378245.0、ee=0.00669342162296594323;境外坐标原样返回。 */
+function outOfChina(lat, lon) {
+  return !(lon > 73.66 && lon < 135.05 && lat > 3.86 && lat < 53.55);
+}
+
+function transformLat(x, y) {
+  let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  ret += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0;
+  ret += ((20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin((y / 3.0) * Math.PI)) * 2.0) / 3.0;
+  ret += ((160.0 * Math.sin((y / 12.0) * Math.PI) + 320 * Math.sin((y * Math.PI) / 30.0)) * 2.0) / 3.0;
+  return ret;
+}
+
+function transformLon(x, y) {
+  let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  ret += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0;
+  ret += ((20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin((x / 3.0) * Math.PI)) * 2.0) / 3.0;
+  ret += ((150.0 * Math.sin((x / 12.0) * Math.PI) + 300.0 * Math.sin((x / 30.0) * Math.PI)) * 2.0) / 3.0;
+  return ret;
+}
+
+/** WGS-84 → GCJ-02;返回 { lat, lon }(境外或非法输入原样返回) */
+function wgs2gcj(lat, lon) {
+  lat = Number(lat);
+  lon = Number(lon);
+  if (!isFinite(lat) || !isFinite(lon) || outOfChina(lat, lon)) return { lat, lon };
+  const a = 6378245.0;
+  const ee = 0.00669342162296594323;
+  let dLat = transformLat(lon - 105.0, lat - 35.0);
+  let dLon = transformLon(lon - 105.0, lat - 35.0);
+  const radLat = (lat / 180.0) * Math.PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - ee * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / (((a * (1 - ee)) / (magic * sqrtMagic)) * Math.PI);
+  dLon = (dLon * 180.0) / ((a / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  return { lat: lat + dLat, lon: lon + dLon };
+}
+
+/** 高德地图外链(URI API):新标签页打开当前位置 */
+function buildAmapUrl(gcj, place) {
+  return (
+    "https://uri.amap.com/marker?position=" + gcj.lon.toFixed(6) + "," + gcj.lat.toFixed(6) +
+    "&name=" + encodeURIComponent(place || "当前位置") +
+    "&coordinate=gaode&callnative=0&src=banana-home"
+  );
+}
+
+/** 统一刷新地图坐标:iframe 高德瓦片 + 标题栏「高德地图」外链,
+ *  统一用 GCJ-02,保证与高德地图所见一致。 */
+function setMapPosition(lat, lon, place) {
+  const gcj = wgs2gcj(lat, lon);
+  const label = place || "当前位置";
+  const mapFrame = document.getElementById("geo-map-frame");
+  if (mapFrame) {
+    // 追加时间戳强制 iframe 重新加载(刷新页面时位置同步刷新)
+    mapFrame.src =
+      "map.html?lat=" + gcj.lat + "&lon=" + gcj.lon +
+      "&label=" + encodeURIComponent(label) + "&t=" + Date.now();
+  }
+  const link = document.getElementById("map-amap");
+  if (link) link.href = buildAmapUrl(gcj, label);
+}
+
 function renderGeoInfo(data) {
   // 数据来源:IP 定位(有 ip)或浏览器精确定位(有 lat/lon);两者都没有则忽略
   if (!data) return;
   if (!data.ip && (data.lat == null || data.lon == null)) return;
   // IP 行已移除;地图卡片由 geo-map-frame 展示当前位置
 
-  // 地图卡片:显示当前位置(追加时间戳强制 iframe 重新加载,刷新页面时位置同步刷新)
-  const mapFrame = document.getElementById("geo-map-frame");
-  if (mapFrame && data.lat != null && data.lon != null) {
-    const label = encodeURIComponent(
-      [data.region, data.city].filter(Boolean).join(" ") || "当前位置"
-    );
-    mapFrame.src =
-      "map.html?lat=" + data.lat + "&lon=" + data.lon + "&label=" + label + "&t=" + Date.now();
-    // 左上角坐标标题:城市名 + 经纬度
-    const titleEl = document.getElementById("map-title");
-    if (titleEl) {
-      const place = [data.region, data.city].filter(Boolean).join(" ") || "当前位置";
-      titleEl.textContent = place + " · " + data.lat.toFixed(4) + ", " + data.lon.toFixed(4);
-    }
+  // 地图卡片:显示当前位置(WGS-84 → GCJ-02 后交给高德瓦片/高德外链)
+  if (data.lat != null && data.lon != null) {
+    setMapPosition(data.lat, data.lon, [data.region, data.city].filter(Boolean).join(" "));
   }
 
   // 自绘天气卡片(Open-Meteo 数据 + emoji 图标)
@@ -2643,19 +2702,25 @@ function renderGeoInfo(data) {
 function setDefaultMap() {
   const mapFrame = document.getElementById("geo-map-frame");
   if (!mapFrame || mapFrame.getAttribute("src")) return;
-  mapFrame.src =
-    "map.html?lat=37.87&lon=112.55&label=" + encodeURIComponent("太原市") + "&t=" + Date.now();
-  const titleEl = document.getElementById("map-title");
-  if (titleEl) titleEl.textContent = "太原市 · 37.8700, 112.5500";
+  setMapPosition(37.87, 112.55, "太原市");
 }
 
-/** 浏览器精确定位:优先于 IP 定位(基于 WiFi/基站/GPS,可到区县级) */
-function useBrowserLocation() {
+/* 精确定位(浏览器 geolocation):仅扩展页面可用(manifest 的 geolocation 权限在扩展页面自动授予,
+ * 无需用户手势、不弹权限框)。PRECISE_GEO_KEY 记录本次浏览器会话已取得的精确坐标:
+ * 会话内刷新/新开标签页不重复定位;浏览器重启后 session 清空 → 首次进入页面重新精确定位。 */
+const PRECISE_GEO_KEY = "preciseGeoAt"; // session: { t, lat, lon }
+const PRECISE_TTL_MS = 10 * 60 * 1000;  // 与 getCurrentPosition 的 maximumAge 一致
+
+/** 自动精确定位(页面加载即执行,无手动入口):基于 WiFi/基站/GPS,可到区县级。
+ *  失败时不阻塞页面、只给一句自动消失的短提示,地图保留 IP 定位结果;
+ *  超时/暂时不可用时自动重试 1 次(无手动重试入口,给冷启动留一次机会)。 */
+function useBrowserLocation(attempt) {
   if (!navigator.geolocation) {
-    showMapTip("当前浏览器不支持定位", true);
+    showMapTip("当前浏览器不支持定位");
     return;
   }
-  showMapTip("正在精确定位…", true);
+  const tries = attempt || 1;
+  showMapTip("正在自动精确定位…", true);
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
       const lat = pos.coords.latitude;
@@ -2664,16 +2729,49 @@ function useBrowserLocation() {
         const data = await chrome.runtime.sendMessage({ type: "setGeoCoords", lat, lon });
         if (data && data.lat != null && data.lon != null) {
           renderGeoInfo(data); // 更新地图/天气/城市
-          showMapTip("✅ 已定位到精确位置");
+          showMapTip("✅ 已定位到精确位置"); // 非 persist:几秒后自动隐藏
+          // 后台已写入坐标后再打标记:保证后续刷新时缓存里确实是精确位置
+          try { chrome.storage.session.set({ [PRECISE_GEO_KEY]: { t: Date.now(), lat, lon } }); } catch (e) { /* 忽略 */ }
         }
-      } catch (e) { showMapTip("定位失败,请重试", true); }
+      } catch (e) {
+        showMapTip("⚠️ 精确定位失败,已使用 IP 定位");
+      }
     },
-    () => {
-      // 失败/被拒:明确提示,不静默
-      showMapTip("⚠️ 定位失败:权限被拒绝或未开启。请点击浏览器地址栏左侧图标 → 将“位置信息”改为“允许”,然后重试", true);
+    (err) => {
+      const code = err && err.code; // 1=PERMISSION_DENIED 2=POSITION_UNAVAILABLE 3=TIMEOUT
+      if (code === 1) {
+        // 权限被屏蔽:不打扰(可在 chrome://settings/content/location 恢复)
+        showMapTip("⚠️ 精确定位权限未开启,已使用 IP 定位");
+        return;
+      }
+      if (tries < 2) {
+        setTimeout(() => useBrowserLocation(tries + 1), 6000); // 冷启动/定位服务未就绪:静默重试 1 次
+        return;
+      }
+      showMapTip("⚠️ 精确定位超时,已使用 IP 定位");
     },
-    { timeout: 8000, maximumAge: 600000 }
+    { timeout: 6000, maximumAge: PRECISE_TTL_MS }
   );
+}
+
+/** 页面加载(首次进入 / 刷新)时自动精确定位(无手动入口)。
+ *  跳过条件:权限已被屏蔽;或本次浏览器会话内已定位过(未过期)。
+ *  由 __whenGrid 包裹调用 → 清爽模式不发定位请求。 */
+async function autoPreciseLocation() {
+  if (!navigator.geolocation) return;
+  let perm = "granted";
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      perm = (await navigator.permissions.query({ name: "geolocation" })).state;
+    }
+  } catch (e) { /* 忽略:按可定位处理 */ }
+  if (perm === "denied") return; // 已被用户屏蔽:不发起定位,也不提示
+  try {
+    const r = await chrome.storage.session.get(PRECISE_GEO_KEY);
+    const c = r && r[PRECISE_GEO_KEY];
+    if (c && Date.now() - c.t < PRECISE_TTL_MS) return; // 会话内已取得精确坐标,无需重复定位
+  } catch (e) { /* 忽略 */ }
+  useBrowserLocation(1);
 }
 
 /** 地图卡片内定位提示(persist=true 停留,否则几秒后自动隐藏) */
@@ -3779,28 +3877,8 @@ async function init() {
     document.getElementById("confirm-dialog").close();
   });
 
-  // 位置:点击地图卡片 → 用户手势触发浏览器精确定位(权限弹窗更友好);
-  // 定位被拒绝/不可用时自动回退到 IP 定位刷新
-  const mapCard = document.getElementById("geo-map-card");
-  if (mapCard) {
-    mapCard.addEventListener("click", async () => {
-      // 先检查定位权限状态,给出明确反馈
-      let permState = "unknown";
-      try {
-        if (navigator.permissions && navigator.permissions.query) {
-          permState = (await navigator.permissions.query({ name: "geolocation" })).state;
-        }
-      } catch (e) { /* 忽略 */ }
-      if (permState === "denied") {
-        showMapTip("⚠️ 定位权限已被屏蔽:请点击浏览器地址栏左侧图标 → 将“位置信息”改为“允许”,然后重新点击地图", true);
-        return;
-      }
-      if (permState === "prompt") {
-        showMapTip("请在弹出窗口中允许定位授权", true);
-      }
-      useBrowserLocation();
-    });
-  }
+  // 位置:页面加载即自动精确定位(见 autoPreciseLocation,无需点击卡片);
+  // 卡片右上角「高德地图」为外链(target=_blank,由 <a> 原生处理,无需 JS 绑定)
 
   // 一键 AI 生成(设置在弹窗内):点击后关闭弹窗,进度显示在主页右上角
   document.getElementById("btn-gen-all").addEventListener("click", async () => {
@@ -3913,11 +3991,16 @@ async function init() {
       setDefaultMap();
     }
   };
-  if (window.__whenGrid) window.__whenGrid(loadGeo);
-  else loadGeo();
+  // 先 IP 定位(秒级给出城市级位置,卡片不空白),再自动精确定位覆盖为区县级。
+  // 顺序执行而非并行:并行时两条链路都会写后台位置缓存,IP 结果可能后到并覆盖精确坐标。
+  const initGeo = async () => {
+    try { await loadGeo(); } catch (e) { /* 忽略 */ }
+    try { await autoPreciseLocation(); } catch (e) { /* 忽略 */ }
+  };
+  if (window.__whenGrid) window.__whenGrid(initGeo);
+  else initGeo();
 
-  // 浏览器精确定位不再自动调用(避免权限弹窗被 Chrome 屏蔽);
-  // 改为用户点击地图卡片时触发(见 geo-map-card 点击绑定)
+  // 自动精确定位见 autoPreciseLocation();地图不再响应点击,右上角「高德地图」为外链
 
   // 快捷方式:翻页由底部圆点控制(renderPager 内绑定);添加入口为最后一页末尾方形框
 

@@ -722,9 +722,19 @@
     if (state.raf) { cancelAnimationFrame(state.raf); state.raf = 0; }
   }
 
+  /** 自动旋转按钮图标:播放/暂停两个 SVG 用 hidden 属性互换(路径数据只在 HTML 维护一份)。
+   *  注意:SVG 元素没有 HTMLElement 的 hidden IDL 属性,必须用 toggleAttribute 真正改属性 */
+  function setAutoIcon(auto) {
+    if (!el.autoBtn) return;
+    const ip = el.autoBtn.querySelector(".ico-play");
+    const iz = el.autoBtn.querySelector(".ico-pause");
+    if (ip) ip.toggleAttribute("hidden", !!auto);
+    if (iz) iz.toggleAttribute("hidden", !auto);
+  }
+
   function toggleAuto() {
     state.auto = !state.auto;
-    el.autoBtn.textContent = state.auto ? "⏸" : "▶";
+    setAutoIcon(state.auto);
     el.autoBtn.title = state.auto ? "暂停自动旋转" : "恢复自动旋转";
     el.autoBtn.classList.toggle("on", state.auto);
     if (state.auto) { state.lastTick = performance.now(); startRotate(); }
@@ -807,7 +817,7 @@
       const { [DC_AUTO_KEY]: auto } = await chrome.storage.local.get(DC_AUTO_KEY);
       state.auto = auto !== false;
     } catch (e) { /* 默认开启 */ }
-    el.autoBtn.textContent = state.auto ? "⏸" : "▶";
+    setAutoIcon(state.auto);
     el.autoBtn.title = state.auto ? "暂停自动旋转" : "恢复自动旋转";
     el.autoBtn.classList.toggle("on", state.auto);
     el.autoBtn.hidden = true; // 无数据前不显示;有帧数据后显示

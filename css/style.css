@@ -141,25 +141,31 @@ body:not(.mode-clean) .main-row {
   box-sizing: border-box;
 }
 
-/* 地图/天气已是卡片(iframe 内容),外层仅作透明容器 */
+/* 地图卡片:标题栏(图标+名称+功能按钮) + 地图栏。
+ * 卡面与其它组件卡片完全一致(玻璃底/描边/圆角/磨砂/内边距),标题栏固定在顶部不被压缩 */
 .map-card {
-  display: block; /* 地图 iframe 透明容器,无需 flex 布局 */
-}
-
-.map-card {
-  cursor: pointer;
   user-select: none;
   flex: none;          /* 卡片页固定高度 */
   display: flex;
   flex-direction: column;
   position: relative;  /* 卡片内定位提示锚点 */
+  background: rgba(255, 255, 255, var(--widget-glass, 0.12));
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  padding: 10px 12px 12px;
+  backdrop-filter: blur(var(--widget-blur, 12px));
+  -webkit-backdrop-filter: blur(var(--widget-blur, 12px));
+}
+
+.map-card > .widget-head {
+  flex-shrink: 0; /* 头部固定高度,不被地图压缩 */
 }
 
 /* 地图卡片内定位状态提示条(替代全局 toast) */
 .map-tip {
   position: absolute;
   left: 50%;
-  bottom: 10px;
+  bottom: 18px;        /* 卡片有 padding:留在下栏(地图)内部 */
   transform: translateX(-50%);
   max-width: calc(100% - 20px);
   padding: 5px 12px;
@@ -907,8 +913,9 @@ dialog::backdrop {
 /* ===== 位置地图卡片 ===== */
 .geo-map-wrap {
   width: 100%;
-  flex: 1;             /* 地图卡片高度自适应 */
+  flex: 1;             /* 地图栏:占满标题栏以下的高度 */
   min-height: 0;
+  position: relative;  /* 地图内浮层(坐标胶囊)锚点 */
   display: flex;       /* flex 布局:iframe 用 flex:1 拉伸(flex 下 height:100% 无效) */
   flex-direction: column;
   border-radius: 10px;
@@ -922,28 +929,13 @@ dialog::backdrop {
   flex: 1;             /* flex 下 height:100% 撑高不可靠,改用 flex 拉伸 */
   min-height: 0;
   border: none;
-  pointer-events: none; /* 鼠标穿透:卡片可点击定位,cursor 不显示;地图可拖拽展示 */
+  pointer-events: none; /* 鼠标穿透:地图仅作展示,不拦截页面滚动/拖拽 */
 }
-/* 当前坐标标题(卡片左上角,位于地图之上) */
-.map-title {
-  position: absolute;
-  top: 8px;
-  left: 10px;
-  z-index: 3;
-  max-width: calc(100% - 20px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  line-height: 1.6;
-  color: rgba(255, 255, 255, 0.95);
-  background: rgba(20, 26, 40, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
-  padding: 2px 8px;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  pointer-events: none;
+
+/* 高德地图外链:放在标题栏右侧 .widget-actions 内,与其它卡片功能按钮完全同款
+ * (尺寸/底色/悬浮/按下全部由 .mini-btn 提供,这里只去掉链接默认下划线) */
+.mini-btn.map-amap {
+  text-decoration: none;
 }
 
 /* ===== 名言警句卡片 ===== */
@@ -1664,18 +1656,18 @@ body.no-anim .main-row {
   position: relative;
 }
 
-/* ⛅ 天气效果按钮:复用 mini-btn 圆形样式(与股票/热榜头部操作按钮一致) */
-.weather-effect-toggle {
-  font-size: 13px;
-}
-
-.weather-effect-toggle:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
+/* ⛅ 天气效果按钮:复用 mini-btn 圆形样式(与股票/热榜头部操作按钮一致);
+ * 悬浮/按下反馈由 .mini-btn 统一提供,这里只保留「已开启」状态 */
 .weather-effect-toggle.active {
   background: rgba(108, 140, 255, 0.4);
   box-shadow: 0 0 0 2px rgba(108, 140, 255, 0.55);
+}
+/* 开启态也保持同一套反馈:缩放在统一块里,底色按状态色继续提亮 */
+.weather-effect-toggle.active:hover {
+  background: rgba(108, 140, 255, 0.55);
+}
+.weather-effect-toggle.active:active {
+  background: rgba(108, 140, 255, 0.7);
 }
 
 /* ===== 书签树导航栏(右侧) ===== */
@@ -2148,36 +2140,23 @@ body.no-anim .main-row {
   flex-shrink: 0;
 }
 
+/* 日历翻月 / 回到今天:与头部功能按钮同一套 24px 圆形玻璃按钮(emoji 图标) */
 .cal-nav,
 .cal-today {
-  border: none;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 4px 6px;
-  transition: background 0.15s;
-}
-
-.cal-nav:hover,
-.cal-today:hover {
-  background: rgba(255, 255, 255, 0.28);
-}
-
-.cal-today {
-  /* 与其他头部操作按钮(mini-btn)一致的圆形玻璃风格 */
   width: 24px;
   height: 24px;
-  padding: 0;
   border: none;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.14);
-  font-size: 11px;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: background 0.15s, transform 0.15s;
 }
 
 .cal-week {
@@ -2425,11 +2404,6 @@ body.no-anim .main-row {
   transition: background 0.15s, transform 0.15s;
 }
 
-.pet-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: scale(1.1);
-}
-
 /* 睡觉 Zzz */
 .pet-zzz {
   position: absolute;
@@ -2628,16 +2602,7 @@ body.no-anim .main-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.3s ease, transform 0.15s;
-}
-
-.music-btn:hover {
-  background: color-mix(in srgb, var(--noise-accent, #667eea) 40%, transparent);
-  transform: scale(1.08);
-}
-
-.music-btn:active {
-  transform: scale(0.94);
+  transition: background 0.15s, transform 0.15s; /* 与其它卡片功能按钮同一时序(悬浮/按下反馈见统一块) */
 }
 
 .music-play {
@@ -2683,7 +2648,6 @@ body.no-anim .main-row {
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.14);
   color: #fff;
-  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   display: flex;
@@ -2692,9 +2656,71 @@ body.no-anim .main-row {
   transition: background 0.15s, transform 0.15s;
 }
 
-.mini-btn:hover {
+/* ===== 卡片功能按钮的图标:统一白色线性 SVG =====
+ * 所有卡片功能按钮的图标共用一套规格:24 网格、2px 圆头描边、颜色随按钮文字色(白)。
+ * 实心图标(播放/暂停/上下首)加 .ico-filled;小圆点等局部填充用内联 fill="currentColor"。
+ * 与设置弹窗 .card-eye 的眼睛图标同一风格。 */
+.card-ico {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.card-ico.ico-filled {
+  fill: currentColor;
+  stroke: none;
+}
+/* display:block 会覆盖 hidden 属性,必须显式置回(播放/暂停图标靠 hidden 切换) */
+.card-ico[hidden] {
+  display: none;
+}
+/* 白噪音按钮圆盘更大,图标同步放大 */
+.music-btn .card-ico {
+  width: 18px;
+  height: 18px;
+}
+.music-play .card-ico {
+  width: 20px;
+  height: 20px;
+}
+
+/* ===== 卡片功能按钮:统一 emoji 图标 + 统一的悬浮/按下反馈 =====
+ * 覆盖各卡片的头部/控制区按钮:股票·八卦·梦想之车·天气·地图(.mini-btn)、
+ * 宠物(.pet-btn)、日历翻月/回今天(.cal-nav/.cal-today)。
+ * 尺寸/形状由各自类决定,交互反馈完全一致:悬浮放大 1.1 并加深底色;按下缩小 0.92 并再提亮。
+ * 白噪音按钮是主题色系(非白玻璃),动作(transition/缩放)一致,底色随 --noise-accent 加深。 */
+.mini-btn:hover,
+.pet-btn:hover,
+.cal-nav:hover,
+.cal-today:hover,
+.weather-effect-toggle:hover,
+.dreamcar-auto:hover {
   background: rgba(255, 255, 255, 0.3);
   transform: scale(1.1);
+}
+
+.mini-btn:active,
+.pet-btn:active,
+.cal-nav:active,
+.cal-today:active,
+.weather-effect-toggle:active,
+.dreamcar-auto:active {
+  background: rgba(255, 255, 255, 0.42);
+  transform: scale(0.92);
+}
+
+.music-btn:hover {
+  background: color-mix(in srgb, var(--noise-accent, #667eea) 40%, transparent);
+  transform: scale(1.1);
+}
+
+.music-btn:active {
+  background: color-mix(in srgb, var(--noise-accent, #667eea) 55%, transparent);
+  transform: scale(0.92);
 }
 
 .widget-empty {
@@ -3882,10 +3908,16 @@ body.no-anim .main-row {
   line-height: 1.6;
 }
 
-/* 自动旋转按钮激活状态 */
+/* 自动旋转按钮激活状态(开启态同样有悬浮/按下反馈:缩放在统一块,底色按主题色提亮) */
 .dreamcar-auto.on {
   background: var(--accent);
   box-shadow: 0 0 8px rgba(108, 140, 255, 0.6);
+}
+.dreamcar-auto.on:hover {
+  background: color-mix(in srgb, var(--accent) 78%, #fff);
+}
+.dreamcar-auto.on:active {
+  background: color-mix(in srgb, var(--accent) 60%, #fff);
 }
 
 /* =========================================================
