@@ -171,8 +171,13 @@ async function initActivity() {
   else render();
 
   // 窗口尺寸变化时重算(卡片被 fillPage 拉伸后,flex 布局已自适应;此处仅兜底)
+  // 防抖:拖动窗口时 resize 每帧触发,重排 180+ 格子成本高
+  let actResizeTimer = 0;
   window.addEventListener("resize", () => {
-    if (chart.offsetParent) renderActivity();
+    clearTimeout(actResizeTimer);
+    actResizeTimer = setTimeout(() => {
+      if (chart.offsetParent) renderActivity();
+    }, 250);
   });
 }
 

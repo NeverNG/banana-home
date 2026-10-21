@@ -104,37 +104,63 @@ function stockRender(list) {
   const box = document.getElementById("stock-list");
   const upd = document.getElementById("stock-update");
   if (!box) return;
-  box.innerHTML = "";
+  const stamp = () => {
+    if (!upd) return;
+    const now = new Date();
+    upd.textContent = now.getHours() + ":" + String(now.getMinutes()).padStart(2, "0");
+  };
   if (!list.length) {
-    box.innerHTML = '<div class="widget-empty">获取失败,自动重试中…</div>';
+    // 保留上一份行情:接口偶发失败时不要把已显示的列表刷成错误占位
+    // (首屏就失败时 __sig 为空,给一次明确提示,避免一直停在"加载中…")
+    if (!box.__sig) box.innerHTML = '<div class="widget-empty">获取失败,自动重试中…</div>';
     return;
   }
-  // 全部条目渲染,超出卡片高度由 stock-list 纵向滚动(不切片/不分页)
+  // 内容签名未变:跳过整表重建(30s 轮询里价格常不变)
+  const sig = list.map((s) => s.code + "\u0001" + s.name + "\u0001" + s.price + "\u0001" + s.pct).join("|");
+  if (box.__sig === sig) { stamp(); return; }
+  box.__sig = sig;
+
+  // 按 code 复用行节点:只改文本,保持滚动位置、避免闪烁
+  const reuse = new Map();
+  for (const el of box.children) {
+    if (el.dataset && el.dataset.code) reuse.set(el.dataset.code, el);
+  }
+  const frag = document.createDocumentFragment();
   for (const s of list) {
-    const row = document.createElement("div");
-    row.className = "stock-item";
-    const name = document.createElement("span");
-    name.className = "stock-name";
-    name.textContent = s.name;
-    const price = document.createElement("span");
-    price.className = "stock-price";
+    let row = reuse.get(s.code);
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "stock-item";
+      row.dataset.code = s.code;
+      const name = document.createElement("span");
+      name.className = "stock-name";
+      const price = document.createElement("span");
+      price.className = "stock-price";
+      const pct = document.createElement("span");
+      pct.className = "stock-pct";
+      row.append(name, price, pct);
+    }
+    const nameEl = row.children[0];
+    const priceEl = row.children[1];
+    const pctEl = row.children[2];
+    if (nameEl.textContent !== s.name) nameEl.textContent = s.name;
     // 接口异常时价格字段可能是 "--"(停牌/解析失败),避免显示 NaN
     const pv = parseFloat(s.price);
-    price.textContent = isFinite(pv) ? pv.toFixed(2) : "--";
-    const pct = document.createElement("span");
-    pct.className = "stock-pct";
+    const priceText = isFinite(pv) ? pv.toFixed(2) : "--";
+    if (priceEl.textContent !== priceText) priceEl.textContent = priceText;
     const v = parseFloat(s.pct);
+    pctEl.className = "stock-pct";
     if (isFinite(v)) {
-      pct.textContent = (v > 0 ? "+" : "") + v.toFixed(2) + "%";
-      pct.classList.add(v >= 0 ? "up" : "down");
+      pctEl.textContent = (v > 0 ? "+" : "") + v.toFixed(2) + "%";
+      pctEl.classList.add(v >= 0 ? "up" : "down");
     } else {
-      pct.textContent = "--";
+      pctEl.textContent = "--";
     }
-    row.append(name, price, pct);
-    box.appendChild(row);
+    frag.appendChild(row);
   }
-  const now = new Date();
-  if (upd) upd.textContent = now.getHours() + ":" + String(now.getMinutes()).padStart(2, "0");
+  box.innerHTML = "";
+  box.appendChild(frag);
+  stamp();
 }
 
 // 滚动模式:无分页(全部条目 + 列表滚动)
@@ -151,6 +177,7 @@ try {
 async function stockRefresh() {
   // 清爽模式守卫:会话内切到清爽模式后停止轮询(脚本仍注入,但不再请求行情接口)
   if (document.body.classList.contains("mode-clean")) return;
+  if (document.hidden) return; // 标签页在后台:30s 轮询没意义
   const list = await stockFetch();
   stockState.lastList = list;
   stockRender(list);
@@ -163,6 +190,7 @@ function renderStockManage() {
   if (!box) return;
   box.innerHTML = "";
   let dragIdx = null;
+  let overRow = null; // dragover 每帧触发:只改上一行,不做全量查询
 
   STOCKS.forEach((s, idx) => {
     const row = document.createElement("div");
@@ -178,7 +206,8 @@ function renderStockManage() {
     row.addEventListener("dragover", (ev) => {
       ev.preventDefault();
       ev.dataTransfer.dropEffect = "move";
-      box.querySelectorAll(".engine-row").forEach((r) => r.classList.remove("drag-over"));
+      if (overRow && overRow !== row) overRow.classList.remove("drag-over");
+      overRow = row;
       if (dragIdx !== null && dragIdx !== idx) row.classList.add("drag-over");
     });
     row.addEventListener("drop", (ev) => {
@@ -195,7 +224,9 @@ function renderStockManage() {
     });
     row.addEventListener("dragend", () => {
       dragIdx = null;
-      box.querySelectorAll(".engine-row").forEach((r) => r.classList.remove("dragging", "drag-over"));
+      if (overRow) overRow.classList.remove("drag-over");
+      overRow = null;
+      row.classList.remove("dragging");
     });
 
     // 排序把手提示

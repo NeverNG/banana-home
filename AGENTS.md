@@ -17,7 +17,7 @@ Chrome MV3 新标签页扩展「香蕉起始页」v1.4.0（`D:\test1\banana-home
 
 ### 落地机制（改动时必须遵守）
 
-1. **组件脚本不进 `index.html`**：`<script>` 只能出现在 main.js 的 `GRID_SCRIPTS` 门控数组（约 3589 行），由 `loadGridScripts()` 在网格模式动态注入。
+1. **组件脚本不进 `index.html`**：`<script>` 只能出现在 main.js 的 `GRID_SCRIPTS` 门控数组（搜索该常量定位），由 `loadGridScripts()` 在网格模式动态注入。
 2. **媒体文件不静态引用**：图片/音频不得以 `<img>`/`<audio>` 等标签写死在 `index.html`；必须在组件 JS 运行时创建/引用（如 `new Audio()`、`new Image()`），否则清爽模式也会被浏览器加载。
 3. **网络请求走门控**：接口获取必须用 `window.__whenGrid(fn)` 包裹（gridgate.js 定义；`__gridLocked` 锁定期间或 `mode-clean` 时排队，切回网格统一 flush）。
 4. **持久化恢复只在组件脚本内**：storage 读取/恢复逻辑放在组件 JS（如 `initMusic` 恢复白噪音），清爽模式不注入即不执行。
@@ -25,7 +25,10 @@ Chrome MV3 新标签页扩展「香蕉起始页」v1.4.0（`D:\test1\banana-home
 6. **跨模式共享的常量/默认值表必须放 `gridgate.js`**（所有模式都加载的基础脚本），不能放门控注入的组件脚本里——否则清爽模式（colpager 等未注入）下设置窗口读不到默认值（事故：`DEFAULT_CARD_HEIGHTS` 曾定义在 colpager.js，清爽模式点「默认」把卡片错误钉成 1/4）。组件脚本用 `const X = window.X || {}` 引用兜底。
    **跨脚本机制/注册器同理**：`onCardHeight` 注册器必须定义在 gridgate.js——calendar.js/main.js 等先于 colpager.js 注入，若注册器定义在 colpager，它们的 `window.onCardHeight && ...` 注册会静默失败（事故：日历切 1/4 不切换周视图）。
 7. **模式切换用 `body.mode-clean`**；搜索栏居中位移用 `margin-top`（勿用 `transform`，会破坏内部 fixed 浮层包含块）；`body.no-anim` 控制刷新不播动画。
+   清爽模式下三栏内 CSS 动画由 `body.mode-clean .main-row * { animation-play-state: paused }` 统一暂停；新增全屏装饰层（如天气粒子）必须在切清爽时清空、切回时重放（参考 `clearWeatherEffect` / `applyWeatherEffect`）。
 8. **扩展页面禁内联脚本（含 iframe 加载的本地 html）**：MV3 默认 CSP `script-src 'self'` 禁止内联 `<script>`，且同样约束 iframe 内文档——新增/复制的页面（如 `综合罗盘.html`）内联脚本不会执行（事故：综合罗盘内联渲染脚本在 ☯ 弹窗 iframe 中白屏，须拆为外部 `综合罗盘.js` 后 `<script src>` 引用）。内联 `<style>` 不受限。
+9. **卡片元数据只有一份**：新增/调整组件卡片时改 `gridgate.js` 的 `CARD_META`（显示名/默认档位/支持档位），设置面板「组件」页签的 14 行由 main.js 按表生成；不要再往 `index.html` 里手写卡行（历史事故：HTML 提示「默认 1/4」与真实默认 2/4 不一致）。
+10. **常驻计算必须带可见性守卫**：新增定时器/动画循环时用 `window.isCardVisible(el)`（gridgate.js）判断是否真的在用户眼前（清爽模式 / 非当前组件页 / 眼睛隐藏 / 标签页后台都返回 false），避免卡片隐藏后仍在跑。`window.onGridResume(fn)` 负责在切回网格时恢复。
 
 ## 其他开发约定
 
@@ -41,9 +44,10 @@ Chrome MV3 新标签页扩展「香蕉起始页」v1.4.0（`D:\test1\banana-home
   - **fillPage 设高度用 `height` 而非 `min-height`**：只有确定 `height` 时卡片内部 `flex: 1` 子元素（宠物舞台/音乐封面等）才会拉伸填充；`min-height` 不参与 flex 分配（宠物图片曾因舞台高 0 不可见）。改 flex 布局后必须用 CDP 确认 `getComputedStyle(card).display === 'flex'`（multi_edit 原子失败时改动可能根本没应用）
   - **改组合选择器前先确认**：`.hot-card, .stock-card, .monitor-card { ... }` 是共享块——曾误把 `display:flex + justify-content:center` 加进组合块，导致热榜内容超高时居中溢出、标题被推到卡片上方。flex 布局改动要逐卡验证（`getBoundingClientRect` 确认头部在卡片范围内），不要依赖"好像改对了"
   - 新增 CSS 前先查现有类是否可复用，避免风格漂移
+- **书签卡 / 导航交互走事件委托**：书签卡与收藏夹导航的事件（`mouseover`/`mouseout`/`click`，以及不冒泡的图标 `load`/`error` 用容器捕获）统一挂在 `#bm-groups` / `#bm-nav` 上（`initBookmarkDelegates` / `initNavDelegates`）。新增卡片/节点时不要再逐个 `addEventListener`——几百个书签会产生上千闭包，且每次整栏重渲都要重建。卡片可通过 `card.dataset.url` + `bookmarkByUrl` 取回数据。
 - **存储 key 命名**：`chrome.storage.local` 持久化用户配置；`chrome.storage.session` 放缓存（书签列表/定位/壁纸）。新 key 若要随"导出配置"走，必须加入 `EXPORT_KEYS`（main.js）。
 - **TDZ 陷阱**：顶层数组/对象初始化时引用的 `const` 必须**已在其之前定义**，或用字符串字面量（历史事故：`SAVED_WP_KEY` 定义在 `EXPORT_KEYS` 之后导致 main.js 加载崩溃）。`node --check` 查不出这类运行时错误。
-- **门控验证**：改动资源加载相关代码后，用真实浏览器 CDP（`Extensions.loadUnpacked` + 检查 `document.scripts`）或 vm mock 测试验证清爽模式零组件脚本；纯逻辑改动至少 `node --check` + 针对性 vm 测试。
+- **门控验证**：改动资源加载相关代码后，用真实浏览器 CDP（`Extensions.loadUnpacked` + 检查 `document.scripts`）或 vm mock 测试验证清爽模式零组件脚本；纯逻辑改动至少 `node --check` + 针对性 vm 测试。提交前统一跑 `node tests/check.js`（等价 `npm run check`）：语法全量解析 + 基础脚本白名单 + 内联脚本检查 + CSS 结构 + `fillPage`/增量渲染的 vm 断言。
 - **用户习惯**：Chrome `chrome://extensions` 开发者模式加载已解压扩展自测，不自动打包 exe/zip。
 - **SVG 内文字样式必须内联属性**：HTML 文档中 CSS **类型选择器**（如 `svg text { fill: ... }`）不匹配 SVG 命名空间的元素——`<text>` 属于 SVG 命名空间，`text` 类型选择器只匹配 HTML 命名空间，导致文字保持默认黑色不可见（事故：综合罗盘 23 环 702 个文字全部丢失，`#evo-chart text{fill}` 未生效）。**How to apply:** 给 SVG 内 text 直接设 `fill` 内联属性（如 compass.js `mkText` 的 `fill:"#e8dcc0"`），不依赖 CSS 类型选择器；CSS 规则可用 `.evo-frame svg * { }` 或仅作兜底。
-- **测试临时文件**：`*.cjs`/`*.mjs`/`*.py` 测试脚本**禁止放在扩展根目录且禁止 `_` 开头**——Chrome `chrome://extensions` 加载扩展时拒绝 `_` 开头（或系统保留名）的文件，整个扩展无法加载（事故：`_tmp_check3.py` 留在根目录导致「无法加载清单」）。临时脚本一律放系统临时目录（如 `%TEMP%`），用后删除，根目录零残留。
+- **测试临时文件**：`*.cjs`/`*.mjs`/`*.py` 测试脚本**禁止放在扩展根目录且禁止 `_` 开头**——Chrome `chrome://extensions` 加载扩展时拒绝 `_` 开头（或系统保留名）的文件，整个扩展无法加载（事故：`_tmp_check3.py` 留在根目录导致「无法加载清单」）。临时脚本一律放系统临时目录（如 `%TEMP%`），用后删除，根目录零残留。唯一例外是常驻自检 `tests/check.js`（`tests/` 子目录、非 `_` 开头，不参与扩展运行），新增长期测试也只放该目录。

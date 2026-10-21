@@ -70,13 +70,15 @@
         t.style.top = Math.round(cTop + dy * SIZE) + "px";
         t.style.backgroundImage = "url(" + url + ")";
         grid.appendChild(t);
-        // 用 Image 预加载触发 load/error 计数(div 背景图不触发 load 事件)
-        var probe = new Image();
-        probe.onload = onTile;
-        probe.onerror = onTile;
-        probe.src = url;
       }
     }
+    // 只探测中心瓦片即可移除"加载中"提示(旧实现每块瓦片都 new Image,双倍对象与请求)
+    var centerSub = ((Math.abs(tx) + Math.abs(ty)) % 4) + 1;
+    var centerUrl = "https://webrd0" + centerSub + ".is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=" + tx + "&y=" + ty + "&z=" + zoom;
+    var probe = new Image();
+    probe.onload = onTile;
+    probe.onerror = onTile;
+    probe.src = centerUrl;
     // 网格容器覆盖视口(瓦片 absolute 定位在其中)
     grid.style.width = W + "px";
     grid.style.height = H + "px";
@@ -101,13 +103,25 @@
     render();
   }
   window.addEventListener("load", function () { setTimeout(ensureRender, 50); });
-  setInterval(ensureRender, 300);
+  // 加载初期卡片高度可能还在变(fillPage 异步):补两次校正即可。
+  // 旧实现 setInterval 300ms 常驻轮询,新标签页开一整天就是 28 万次空转。
+  setTimeout(ensureRender, 150);
+  setTimeout(ensureRender, 400);
   // 卡片档位切换 → iframe 尺寸变化 → resize 重建(防抖)
   var rt = null;
   window.addEventListener("resize", function () {
     clearTimeout(rt);
     rt = setTimeout(ensureRender, 120);
   });
+  // iframe 视口变化在某些布局场景不会触发 window.resize:用 ResizeObserver 兜底
+  if (typeof ResizeObserver !== "undefined") {
+    try {
+      new ResizeObserver(function () {
+        clearTimeout(rt);
+        rt = setTimeout(ensureRender, 120);
+      }).observe(document.documentElement);
+    } catch (e) { /* 忽略 */ }
+  }
 
   // 兜底:无论瓦片是否加载成功,3 秒后移除"加载中"提示
   setTimeout(function () {

@@ -175,6 +175,7 @@ function renderEngineManage() {
   if (!box) return;
   box.innerHTML = "";
   let dragIdx = null;
+  let overRow = null; // 当前 dragover 行(dragover 每帧触发,避免全量 querySelectorAll)
 
   state.engines.forEach((e, idx) => {
     const row = document.createElement("div");
@@ -190,7 +191,8 @@ function renderEngineManage() {
     row.addEventListener("dragover", (ev) => {
       ev.preventDefault();
       ev.dataTransfer.dropEffect = "move";
-      box.querySelectorAll(".engine-row").forEach((r) => r.classList.remove("drag-over"));
+      if (overRow && overRow !== row) overRow.classList.remove("drag-over");
+      overRow = row;
       if (dragIdx !== null && dragIdx !== idx) row.classList.add("drag-over");
     });
     row.addEventListener("drop", (ev) => {
@@ -205,7 +207,9 @@ function renderEngineManage() {
     });
     row.addEventListener("dragend", () => {
       dragIdx = null;
-      box.querySelectorAll(".engine-row").forEach((r) => r.classList.remove("dragging", "drag-over"));
+      if (overRow) overRow.classList.remove("drag-over");
+      overRow = null;
+      row.classList.remove("dragging");
     });
 
     const img = document.createElement("img");
@@ -408,6 +412,47 @@ const state = {
   editingUrl: null,
 };
 
+/* ===== 启动预读:首屏把十几个 storage 读取合并成一次 IPC =====
+ * 旧实现各模块各自 chrome.storage.local.get(),一次启动 10+ 次往返。
+ * 这里在 init 最开始把首屏要用的 key 一次读回;getLocal 在预读存在时直接命中快照。
+ * 注意:key 用字符串字面量(NAV_COLLAPSE_KEY / BM_FOLDER_KEY 等常量定义在文件更下方,
+ * 直接引用会触发 TDZ —— 见 AGENTS.md)。 */
+let bootStore = null;
+const BOOT_KEYS = [
+  "bgColor", "cardAlphas", "cardBlurs", "cleanBgStyle", "model", "baseUrl",
+  "showQuickNames", "thumbPreviewBM", "thumbPreviewQL", "fabAutoHide", "homeMode",
+  "bmNavCollapsed", "bmFolder", "navCollapsed", "bmScrollPos",
+  "cardHeights", "cardHidden", "searchHistory", "weatherEffectEnabled",
+  "deepseekApiKey", "autoDescribe", "engines", "currentEngine", "enginesMerged",
+];
+
+/** 首次启动读:命中预读快照时同步返回(仍是 Promise,调用方无需改动) */
+function getLocal(keys) {
+  if (bootStore) {
+    const arr = typeof keys === "string" ? [keys] : Array.isArray(keys) ? keys : null;
+    if (arr && arr.every((k) => k in bootStore)) {
+      const out = {};
+      for (const k of arr) out[k] = bootStore[k];
+      return Promise.resolve(out);
+    }
+  }
+  return chrome.storage.local.get(keys);
+}
+
+/* ===== 轻量错误采集 =====
+ * 全项目有 100+ 处 catch 静默忽略,线上出问题时很难定位。这里兜底记录未捕获异常与
+ * 未处理 Promise(仅内存环形缓冲,不联网),排查时在控制台执行 __appErrors() 查看。 */
+const appErrors = [];
+function recordAppError(tag, err) {
+  const msg = (err && (err.stack || err.message)) || String(err || "");
+  appErrors.push({ t: Date.now(), tag, msg: String(msg).slice(0, 500) });
+  if (appErrors.length > 100) appErrors.shift();
+  if (window.__debugErrors) console.debug("[banana]", tag, msg);
+}
+window.__appErrors = () => appErrors.slice();
+window.addEventListener("error", (e) => recordAppError("error", e.error || e.message));
+window.addEventListener("unhandledrejection", (e) => recordAppError("unhandledrejection", e.reason));
+
 /* ===== 工具 ===== */
 function isExtensionEnv() {
   return typeof chrome !== "undefined" &&
@@ -424,6 +469,10 @@ function hostOf(url) {
 
 /** 网站真实图标:优先 Chrome 本地 favicon 缓存,失败回退通用地球图标(无文字) */
 let faviconStamp = 0; // 切回页面时递增,强制图标重新获取(读取 Chrome 最新 favicon 缓存)
+
+/* 图标主色缓存:同一 URL 只做一次画布取色(canvas + getImageData 同步成本高)。
+ * 旧实现每张卡每次渲染、每次切回标签页都重算一遍,几百个书签时明显卡顿。 */
+const glowColorCache = new Map();
 
 function buildFavicon(url, size = 64) {
   if (chrome.runtime?.id) {
@@ -470,21 +519,44 @@ function extractColor(img) {
   }
 }
 
+/** 带缓存的取色:同一 URL 只算一次(失败不缓存,下次换了图标还能再试) */
+function glowColorOf(url, img) {
+  const hit = glowColorCache.get(url);
+  if (hit) return hit;
+  const c = extractColor(img);
+  if (c) glowColorCache.set(url, c);
+  return c;
+}
+
 /* ===== 时钟与问候语 ===== */
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
-let clockDateCache = ""; // 日期文本缓存:仅跨天时重写,避免每秒重复写 DOM
+let clockDateCache = ""; // 日期文本缓存:仅跨天时重写,避免每分钟重复写 DOM
+let clockTimeCache = ""; // 时间文本缓存:同一分钟不重复写 DOM
+let clockTimer = null;
 
 function updateClock() {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
-  document.getElementById("time").textContent =
-    `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const timeText = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  if (timeText !== clockTimeCache) {
+    clockTimeCache = timeText;
+    document.getElementById("time").textContent = timeText;
+  }
   const dateText =
     `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 星期${WEEKDAYS[now.getDay()]}`;
   if (dateText !== clockDateCache) {
     clockDateCache = dateText;
     document.getElementById("date").textContent = dateText;
   }
+}
+
+/** 时钟:对齐到下一分钟整点再唤醒(旧实现 setInterval 1s,全天 8.6 万次无谓唤醒) */
+function startClock() {
+  updateClock();
+  clearTimeout(clockTimer);
+  const now = new Date();
+  const delay = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 30;
+  clockTimer = setTimeout(startClock, delay);
 }
 
 /* ===== 名言警句(每日一句) ===== */
@@ -568,6 +640,8 @@ function nextQuote() {
 /* ===== 搜索历史 + 关联建议 ===== */
 const SEARCH_HISTORY_KEY = "searchHistory";
 let suggestTimer = null;
+let suggestSeq = 0;      // 请求序号:输入变化后丢弃旧响应
+let suggestAbort = null; // 在途联想请求(输入变化/关闭下拉时中止)
 
 /** 记录搜索历史(去重,最新在前,最多 10 条) */
 function addSearchHistory(q) {
@@ -715,6 +789,11 @@ function parseSuggestText(text, type) {
 /** 获取关联建议(前端直连,扩展页面有 host_permissions 可绕过 CORS) */
 function fetchSuggest(q) {
   try {
+    const seq = ++suggestSeq;
+    // 中止上一次在途请求:否则快速输入时旧响应可能晚到并覆盖新建议
+    if (suggestAbort) { try { suggestAbort.abort(); } catch (e) { /* 忽略 */ } }
+    suggestAbort = new AbortController();
+    const signal = suggestAbort.signal;
     const eng = getCurrentEngine();
     const id = eng ? eng.id : "";
     const kw = encodeURIComponent(q.trim());
@@ -732,11 +811,12 @@ function fetchSuggest(q) {
     );
     let idx = 0;
     const tryNext = () => {
-      if (idx >= sources.length) return;
+      if (seq !== suggestSeq || idx >= sources.length) return; // 已被更新的输入取代
       const src = sources[idx++];
-      fetch(src.u, { credentials: "omit" })
+      fetch(src.u, { credentials: "omit", signal })
         .then((r) => r.arrayBuffer())
         .then((buf) => {
+          if (seq !== suggestSeq) return; // 旧响应:丢弃
           // 百度/搜狗建议接口返回 GBK 编码,必应/360 为 UTF-8
           const enc = src.t === "baidu" || src.t === "sogou" ? "gbk" : "utf-8";
           const text = new TextDecoder(enc).decode(buf);
@@ -744,7 +824,7 @@ function fetchSuggest(q) {
           if (items.length) renderSearchDropdown(items, "🔎 ");
           else tryNext();
         })
-        .catch(() => tryNext());
+        .catch(() => { if (seq === suggestSeq) tryNext(); });
     };
     tryNext();
   } catch (e) { /* 忽略 */ }
@@ -777,6 +857,8 @@ let hoverClicked = false;
 /** 关闭下拉(未点击时恢复原输入) */
 function hideSearchDropdown() {
   clearTimeout(suggestTimer);
+  suggestSeq++; // 作废在途联想
+  if (suggestAbort) { try { suggestAbort.abort(); } catch (e) { /* 忽略 */ } suggestAbort = null; }
   if (hoverOriginal !== null && !hoverClicked) {
     const input = document.getElementById("search-input");
     if (input) input.value = hoverOriginal;
@@ -883,7 +965,9 @@ async function saveMaintain() {
     [DESC_FAIL_KEY]: state.failed,
   });
   document.getElementById("maintain-dialog").close();
-  renderBookmarks();
+  // 链接变了要改卡片 href(结构变化)才整栏重建;只改标题/简介时只更新这一张卡
+  if (urlChanged) renderBookmarks();
+  else patchBookmarkCards([url]);
 }
 
 async function regenerateMaintain() {
@@ -919,7 +1003,7 @@ async function regenerateMaintain() {
   }
 
   document.getElementById("maintain-dialog").close();
-  renderBookmarks();
+  patchBookmarkCards([url]);
 }
 
 /** 点击"删除书签":弹出确认/取消弹窗 */
@@ -1000,6 +1084,81 @@ function bindHover(card, item, kind) {
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => hideThumb(), 200);
   });
+}
+
+/* ===== 书签卡事件委托 =====
+ * 旧实现每张卡挂 5 个监听(mouseenter/mouseleave/desc click/⋯ click/图标 load 或 error),
+ * 几百个书签就是上千个闭包,且每次整栏重渲都全部重建。
+ * 现在容器上挂一份:mouseover/mouseout 用 closest('.bm-card') 判卡片,
+ * click 判 .bm-more / .bm-desc,load/error 走捕获阶段(这两个事件不冒泡)。 */
+let hoverCard = null;
+
+function initBookmarkDelegates() {
+  const groupsEl = document.getElementById("bm-groups");
+  if (!groupsEl) return;
+
+  groupsEl.addEventListener("mouseover", (e) => {
+    const card = e.target.closest && e.target.closest(".bm-card");
+    if (!card || card === hoverCard) return; // 卡内移动不重复触发
+    hoverCard = card;
+    const item = bookmarkByUrl.get(card.dataset.url);
+    if (!item) return;
+    hoverMouseX = e.clientX;
+    hoverMouseY = e.clientY;
+    clearTimeout(hoverTimer);
+    clearTimeout(hideTimer);
+    hoverTimer = setTimeout(() => {
+      if (!state.showThumbPreviewBM) return;
+      showThumb(card, item);
+    }, 300); // 防抖:快速扫过不触发
+  });
+
+  groupsEl.addEventListener("mouseout", (e) => {
+    const card = e.target.closest && e.target.closest(".bm-card");
+    if (!card || card !== hoverCard) return;
+    if (e.relatedTarget && card.contains(e.relatedTarget)) return; // 仍在同一张卡内
+    hoverCard = null;
+    clearTimeout(hoverTimer);
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => hideThumb(), 200); // 边缘抖动容错
+  });
+
+  groupsEl.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!t.closest) return;
+    const card = t.closest(".bm-card");
+    if (!card) return;
+    const item = bookmarkByUrl.get(card.dataset.url);
+    if (!item) return;
+    const more = t.closest(".bm-more");
+    const desc = t.closest(".bm-desc");
+    if (!more && !desc) return; // 点卡片其它区域 → 正常打开链接
+    if (desc && !state.failed[item.url]) return; // 描述只有"失败态"才拦截点击
+    e.preventDefault();
+    e.stopPropagation();
+    openMaintainDialog(item);
+  });
+
+  // 图标 load/error:不冒泡,但捕获阶段能被容器收到
+  const onImgEvent = (e) => {
+    const img = e.target;
+    if (!img || img.tagName !== "IMG" || !img.closest || !img.closest(".bm-icon")) return;
+    const card = img.closest(".bm-card");
+    if (!card) return;
+    const url = card.dataset.url;
+    if (!url) return;
+    if (e.type === "error") {
+      if (img.dataset.fallback) return;
+      img.dataset.fallback = "1";
+      img.src = FALLBACK_ICON; // 失败显示通用地球图标,不用文字
+      return;
+    }
+    if (glowColorCache.has(url)) return; // 已缓存主色,不再做画布取色
+    const c = glowColorOf(url, img);
+    if (c) card.style.setProperty("--glow-color", c);
+  };
+  groupsEl.addEventListener("load", onImgEvent, true);
+  groupsEl.addEventListener("error", onImgEvent, true);
 }
 
 function showThumb(card, item) {
@@ -1109,19 +1268,68 @@ function hideThumb() {
 }
 
 /* ===== 卡片渲染 ===== */
+const cardIndex = new Map();     // url -> 卡片元素(增量更新用,避免整栏重建)
+const bookmarkByUrl = new Map(); // url -> 书签数据
+let bookmarkDirty = false;       // 清爽模式期间收到更新:切回网格时补渲染
+
+/** 把"标题/描述"的当前状态写到已存在的卡片上(创建与增量更新共用) */
+function applyCardContent(card, item) {
+  const aiTitle = state.titles[item.url];
+  const titleEl = card.querySelector(".bm-title");
+  if (titleEl) {
+    const t = aiTitle || item.title;
+    if (titleEl.textContent !== t) titleEl.textContent = t;
+    if (aiTitle && aiTitle !== item.title) titleEl.title = `原书签标题:${item.title}`;
+    else titleEl.removeAttribute("title");
+  }
+  const desc = card.querySelector(".bm-desc");
+  if (!desc) return;
+  const text = state.descriptions[item.url];
+  desc.classList.remove("desc-failed", "desc-empty");
+  if (text) {
+    if (desc.textContent !== text) desc.textContent = text;
+    desc.removeAttribute("title");
+  } else if (state.failed[item.url]) {
+    desc.classList.add("desc-failed");
+    const msg = "⚠️ 无法生成简介,请手动维护";
+    if (desc.textContent !== msg) desc.textContent = msg;
+    desc.title = "点击手动维护卡片信息";
+  } else {
+    desc.classList.add("desc-empty");
+    const msg = state.generating ? "生成中…" : "✨ 点右上角\"一键 AI 生成\"";
+    if (desc.textContent !== msg) desc.textContent = msg;
+    desc.removeAttribute("title");
+  }
+}
+
+/** 只更新变化的书签卡:AI 批量生成时每条简介落盘都会触发一次,旧实现整栏重建。
+ * returns true 表示存在未知 URL(结构变化),调用方应回退到全量渲染 */
+function patchBookmarkCards(urls) {
+  if (!urls || !urls.length) return true;
+  if (document.body.classList.contains("mode-clean")) { bookmarkDirty = true; return true; } // 清爽模式不渲染网格内容
+  for (const url of urls) {
+    const card = cardIndex.get(url);
+    if (!card) return false;
+    const item = bookmarkByUrl.get(url);
+    if (item) applyCardContent(card, item);
+  }
+  return true;
+}
+
 function createCard(item) {
   const card = document.createElement("a");
   card.className = "bm-card";
   card.href = item.url;
   card.target = "_blank";
   card.rel = "noopener noreferrer";
+  card.dataset.url = item.url;
 
   // 头部:网站图标 + 标题 + 域名
   const head = document.createElement("div");
   head.className = "bm-card-head";
 
-  // 阴影颜色:默认随机柔和色,图标加载成功后从图标提取
-  card.style.setProperty("--glow-color", randomGlow());
+  // 阴影颜色:已缓存过就直接用,否则先随机、图标加载后取色覆盖
+  card.style.setProperty("--glow-color", glowColorCache.get(item.url) || randomGlow());
 
   const icon = document.createElement("span");
   icon.className = "bm-icon";
@@ -1129,25 +1337,14 @@ function createCard(item) {
   img.src = buildFavicon(item.url);
   img.alt = "";
   img.loading = "lazy";
-  img.addEventListener("error", () => {
-    if (img.dataset.fallback) return;
-    img.dataset.fallback = "1";
-    img.src = FALLBACK_ICON; // 失败显示通用地球图标,不用文字
-  });
-  img.addEventListener("load", () => {
-    const c = extractColor(img);
-    if (c) card.style.setProperty("--glow-color", c);
-  });
+  // 图标 load/error 由 initBookmarkDelegates 在容器捕获阶段统一处理(见文件上方)
   icon.appendChild(img);
 
   const textBox = document.createElement("div");
   textBox.style.minWidth = "0";
 
-  const aiTitle = state.titles[item.url];
   const title = document.createElement("div");
   title.className = "bm-title";
-  title.textContent = aiTitle || item.title;
-  if (aiTitle && aiTitle !== item.title) title.title = `原书签标题:${item.title}`;
 
   const host = document.createElement("div");
   host.className = "bm-host";
@@ -1156,41 +1353,18 @@ function createCard(item) {
 
   head.append(icon, textBox);
 
-  // 描述行(三态:成功 / 失败可维护 / 未处理占位)
+  // 描述行(三态由 applyCardContent 统一维护);失败态点击维护由容器事件委托处理
   const desc = document.createElement("div");
   desc.className = "bm-desc";
 
-  const text = state.descriptions[item.url];
-  if (text) {
-    desc.textContent = text;
-  } else if (state.failed[item.url]) {
-    desc.classList.add("desc-failed");
-    desc.textContent = "⚠️ 无法生成简介,请手动维护";
-    desc.title = "点击手动维护卡片信息";
-    desc.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openMaintainDialog(item);
-    });
-  } else {
-    desc.classList.add("desc-empty");
-    desc.textContent = state.generating ? "生成中…" : "✨ 点右上角\"一键 AI 生成\"";
-  }
-
-  // 右下角 ⋮ 按钮:维护卡片信息
+  // 右下角 ⋮ 按钮:维护卡片信息(点击由容器事件委托处理)
   const more = document.createElement("button");
   more.className = "bm-more";
   more.textContent = "⋯";
   more.title = "维护卡片信息";
-  more.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    openMaintainDialog(item);
-  });
-
-  bindHover(card, item);
 
   card.append(head, desc, more);
+  applyCardContent(card, item);
   return card;
 }
 
@@ -1202,6 +1376,7 @@ function applyBgColor(color) {
   bg.style.background = color;
   bg.style.backgroundImage = "none";
   bg.classList.remove("has-image");
+  bg.classList.add("has-color"); // 关掉渐变动画层(见 style.css .bg.has-color::before)
   // 清除壁纸保存,避免下次打开恢复壁纸
   try { chrome.storage.local.remove(SAVED_WP_KEY); } catch (e) { /* 忽略 */ }
 }
@@ -1212,14 +1387,14 @@ function resetBgColor() {
   if (!bg) return;
   bg.style.background = "";
   bg.style.backgroundImage = "";
-  bg.classList.remove("has-image");
+  bg.classList.remove("has-image", "has-color"); // 恢复渐变动画层
   try { chrome.storage.local.remove(BG_COLOR_KEY); } catch (e) { /* 忽略 */ }
 }
 
 /** 打开主页时恢复保存的背景颜色 */
 async function initBgColor() {
   try {
-    const { [BG_COLOR_KEY]: c } = await chrome.storage.local.get(BG_COLOR_KEY);
+    const { [BG_COLOR_KEY]: c } = await getLocal(BG_COLOR_KEY);
     if (c) applyBgColor(c);
   } catch (e) { /* 忽略 */ }
 }
@@ -1232,13 +1407,13 @@ function saveNavState() {
 
 async function initNavState() {
   try {
-    const { [NAV_COLLAPSED_KEY]: arr, [BM_SCROLL_KEY]: pos } = await chrome.storage.local.get([
+    const { [NAV_COLLAPSED_KEY]: arr, [BM_SCROLL_KEY]: pos } = await getLocal([
       NAV_COLLAPSED_KEY,
       BM_SCROLL_KEY,
     ]);
     if (Array.isArray(arr)) state.collapsed = new Set(arr);
     if (typeof pos === "number") window._bmScrollRestore = pos;
-    const { [BM_FOLDER_KEY]: folder } = await chrome.storage.local.get(BM_FOLDER_KEY);
+    const { [BM_FOLDER_KEY]: folder } = await getLocal(BM_FOLDER_KEY);
     if (folder) state.currentFolder = folder;
   } catch (e) { /* 忽略 */ }
 }
@@ -1268,7 +1443,7 @@ function initNavCollapse() {
   };
 
   try {
-    chrome.storage.local.get(NAV_COLLAPSE_KEY).then(({ [NAV_COLLAPSE_KEY]: c }) => {
+    getLocal(NAV_COLLAPSE_KEY).then(({ [NAV_COLLAPSE_KEY]: c }) => {
       apply(c === true);
     });
   } catch (e) { /* 忽略 */ }
@@ -1283,13 +1458,19 @@ function initNavCollapse() {
 }
 function renderBookmarks() {
   // 清爽模式守卫:不渲染网格内容(书签/快捷方式/favicon 请求都不触发)
-  if (document.body.classList.contains("mode-clean")) return;
+  if (document.body.classList.contains("mode-clean")) { bookmarkDirty = true; return; }
+  bookmarkDirty = false;
   const groupsEl = document.getElementById("bm-groups");
   const navEl = document.getElementById("bm-nav");
   const emptyEl = document.getElementById("bm-empty");
 
   groupsEl.innerHTML = "";
   if (navEl) navEl.innerHTML = "";
+  cardIndex.clear();
+  bookmarkByUrl.clear();
+  hoverCard = null; // 卡片已重建:悬停目标失效
+  state.bookmarks.forEach((b) => bookmarkByUrl.set(b.url, b));
+  invalidateNavMetrics(); // DOM 即将重建:滚动高亮缓存作废
   if (state.bookmarks.length === 0) {
     emptyEl.textContent = "暂无收藏夹内容。在 Chrome 中添加收藏夹后会自动出现在这里。";
   }
@@ -1315,7 +1496,11 @@ function renderBookmarks() {
 
     const grid = document.createElement("div");
     grid.className = "bm-grid";
-    for (const item of group.items) grid.appendChild(createCard(item));
+    for (const item of group.items) {
+      const card = createCard(item);
+      cardIndex.set(item.url, card);
+      grid.appendChild(card);
+    }
 
     section.append(h, grid);
     groupsEl.appendChild(section);
@@ -1399,8 +1584,11 @@ function createNavTooltip() {
 function showNavTooltip(e, path) {
   const t = document.getElementById("nav-tooltip");
   if (!t) return;
-  t.textContent = path;
+  if (t.textContent !== path) t.textContent = path;
   t.hidden = false;
+  // 尺寸只在显示时量一次:mousemove 里再读 offsetWidth/Height 会每帧强制布局
+  t._w = t.offsetWidth;
+  t._h = t.offsetHeight;
   moveNavTooltip(e);
 }
 
@@ -1410,8 +1598,8 @@ function moveNavTooltip(e) {
   const pad = 12;
   let x = e.clientX + pad;
   let y = e.clientY + pad;
-  const tw = t.offsetWidth;
-  const th = t.offsetHeight;
+  const tw = t._w || t.offsetWidth;
+  const th = t._h || t.offsetHeight;
   if (x + tw > window.innerWidth - 8) x = e.clientX - tw - pad;
   if (y + th > window.innerHeight - 8) y = e.clientY - th - pad;
   t.style.left = x + "px";
@@ -1430,20 +1618,13 @@ function renderNavNode(node, parent) {
   row.dataset.level = String(node.level);
   row.dataset.path = node.path;
   row.dataset.title = node.folder || ""; // 原始分组标题,滚动定位高亮匹配用
+  row.dataset.firstGroup = node.firstGroup || ""; // 子树首个含书签分组(点击兜底定位)
 
-  // 展开/折叠箭头(仅含子文件夹时)
+  // 展开/折叠箭头(仅含子文件夹时);点击由 initNavDelegates 统一委托
   const arrow = document.createElement("span");
   arrow.className = "bm-nav-arrow";
   if (node.children.length) {
     arrow.textContent = state.collapsed.has(node.path) ? "▸" : "▾";
-    arrow.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (state.collapsed.has(node.path)) state.collapsed.delete(node.path);
-      else state.collapsed.add(node.path);
-      renderNav(document.getElementById("bm-nav").__root, document.getElementById("bm-nav"));
-      updateNavActive();
-      saveNavState(); // 持久化折叠状态
-    });
   } else {
     arrow.textContent = "";
   }
@@ -1452,9 +1633,7 @@ function renderNavNode(node, parent) {
   name.className = "bm-nav-name";
   name.textContent = node.name;
   // 自定义即时 tooltip:悬浮立即显示完整路径(原生 title 有约 1s 延迟且易被重绘打断)
-  name.addEventListener("mouseenter", (e) => showNavTooltip(e, node.path));
-  name.addEventListener("mousemove", moveNavTooltip);
-  name.addEventListener("mouseleave", hideNavTooltip);
+  // mouseover/mousemove/mouseout 由 initNavDelegates 在容器上统一处理
 
   row.append(arrow, name);
 
@@ -1466,24 +1645,6 @@ function renderNavNode(node, parent) {
     row.appendChild(cnt);
   }
 
-  // 点击节点:立即显示选中状态,并滚动定位到该文件夹的书签分组;
-  // 滚动过程中/结束后由 updateNavActive 按位置接管选中
-  row.addEventListener("click", () => {
-    const navEl2 = document.getElementById("bm-nav");
-    if (navEl2) {
-      navEl2.querySelectorAll(".bm-nav-node").forEach((n) => n.classList.remove("active"));
-    }
-    row.classList.add("active"); // 点击即选中
-    if (node.level === 0) {
-      // 最上级"书签栏":滚动条滑到最上面(根分组在最前)
-      const gEl = document.getElementById("bm-groups");
-      if (gEl) gEl.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-    const target = groupsElOf(node.folder || node.firstGroup || node.path);
-    if (target) scrollToGroup(target);
-  });
-
   parent.appendChild(row);
 
   // 递归子级(折叠时隐藏):子级放进嵌套容器,左边框即层级连接线(贯穿子级,末项不悬空)
@@ -1493,6 +1654,72 @@ function renderNavNode(node, parent) {
     for (const c of node.children) renderNavNode(c, sub);
     parent.appendChild(sub);
   }
+}
+
+/* ===== 导航交互委托:点击选中 / 箭头折叠 / tooltip 跟随 ===== */
+function toggleNavNode(row) {
+  const path = row.dataset.path;
+  if (!path) return;
+  if (state.collapsed.has(path)) state.collapsed.delete(path);
+  else state.collapsed.add(path);
+  const navEl = document.getElementById("bm-nav");
+  if (!navEl) return;
+  renderNav(navEl.__root, navEl);
+  invalidateNavMetrics(); // 导航节点已重建:高亮缓存作废
+  updateNavActive();
+  saveNavState(); // 持久化折叠状态
+}
+
+/** 点击节点:立即显示选中状态,并滚动定位到该文件夹的书签分组;
+ * 滚动过程中/结束后由 updateNavActive 按位置接管选中 */
+function activateNavNode(row) {
+  const navEl = document.getElementById("bm-nav");
+  if (navEl) {
+    navEl.querySelectorAll(".bm-nav-node").forEach((n) => n.classList.remove("active"));
+  }
+  row.classList.add("active"); // 点击即选中
+  const level = parseInt(row.dataset.level, 10) || 0;
+  if (level === 0) {
+    // 最上级"书签栏":滚动条滑到最上面(根分组在最前)
+    const gEl = document.getElementById("bm-groups");
+    if (gEl) gEl.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  const target = groupsElOf(row.dataset.title || row.dataset.firstGroup || row.dataset.path);
+  if (target) scrollToGroup(target);
+}
+
+function initNavDelegates() {
+  const navEl = document.getElementById("bm-nav");
+  if (!navEl) return;
+  navEl.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!t.closest) return;
+    const row = t.closest(".bm-nav-node");
+    if (!row) return;
+    // 箭头只负责折叠,不再同时触发选中(与旧实现的 stopPropagation 等价)
+    if (t.closest(".bm-nav-arrow")) toggleNavNode(row);
+    else activateNavNode(row);
+  });
+  navEl.addEventListener("mouseover", (e) => {
+    const t = e.target;
+    if (!t.closest) return;
+    const name = t.closest(".bm-nav-name");
+    const row = name && name.closest(".bm-nav-node");
+    if (!row) return;
+    showNavTooltip(e, row.dataset.path || "");
+  });
+  navEl.addEventListener("mousemove", (e) => {
+    if (e.target.closest && e.target.closest(".bm-nav-name")) moveNavTooltip(e);
+  });
+  navEl.addEventListener("mouseout", (e) => {
+    const t = e.target;
+    if (!t.closest) return;
+    const name = t.closest(".bm-nav-name");
+    if (!name) return;
+    if (e.relatedTarget && name.contains(e.relatedTarget)) return; // 仍在同一个名称节点内
+    hideNavTooltip();
+  });
 }
 
 /** 供箭头折叠时重渲染导航使用:记录根节点引用 */
@@ -1523,40 +1750,61 @@ function groupsElOf(title) {
   return null;
 }
 
-/** 高亮当前可见文件夹对应的导航节点(scroll 高频调用,rAF 节流到每帧一次) */
+/* ===== 导航滚动高亮:缓存分组位置,避免滚动时每帧 N 次强制布局 ===== */
 let navActiveRaf = null;
+let navMetrics = null;   // [{ title, top, el }] 相对滚动内容顶部的偏移(与 scrollTop 无关)
+let navNodeList = null;  // 导航节点缓存
+let navActivePath;       // undefined=尚未计算;null=无命中
+
+function invalidateNavMetrics() {
+  navMetrics = null;
+  navNodeList = null;
+  navActivePath = undefined;
+}
+
+function ensureNavMetrics() {
+  if (navMetrics) return navMetrics;
+  const groupsEl = document.getElementById("bm-groups");
+  const navEl = document.getElementById("bm-nav");
+  if (!groupsEl || !navEl) return null;
+  const base = groupsEl.getBoundingClientRect().top - groupsEl.scrollTop;
+  navMetrics = Array.from(groupsEl.querySelectorAll(".bm-group")).map((g) => ({
+    title: g.dataset.navTitle,
+    top: Math.round(g.getBoundingClientRect().top - base),
+    el: g,
+  }));
+  navNodeList = Array.from(navEl.querySelectorAll(".bm-nav-node"));
+  return navMetrics;
+}
+
 function updateNavActive() {
   if (navActiveRaf) return; // 已有待执行帧,合并本次
   navActiveRaf = requestAnimationFrame(() => {
     navActiveRaf = null;
     const groupsEl = document.getElementById("bm-groups");
-    const navEl = document.getElementById("bm-nav");
-    if (!groupsEl || !navEl) return;
-    const groups = groupsEl.querySelectorAll(".bm-group");
-    if (!groups.length) return;
+    if (!groupsEl) return;
+    const metrics = ensureNavMetrics();
+    if (!metrics || !metrics.length) return;
 
-    const top = groupsEl.getBoundingClientRect().top;
-    let active = null;
-    for (const g of groups) {
-      if (g.getBoundingClientRect().top <= top + 60) {
-        active = g.dataset.navTitle;
-      } else {
-        break;
-      }
+    // 二分查找最后一个 top <= scrollTop + 60 的分组(替代逐组 getBoundingClientRect)
+    const y = groupsEl.scrollTop + 60;
+    let lo = 0, hi = metrics.length - 1, hit = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (metrics[mid].top <= y) { hit = mid; lo = mid + 1; } else hi = mid - 1;
     }
-    navEl.querySelectorAll(".bm-nav-node").forEach((n) => {
-      // 将分组标题统一为导航路径(非书签栏顶级加"书签栏 / "前缀),与节点 path 匹配
-      const navPath =
-        active && active !== "书签栏" && active.indexOf("书签栏 / ") !== 0
-          ? "书签栏 / " + active
-          : active;
-      n.classList.toggle("active", n.dataset.path === navPath);
-    });
+    const active = hit >= 0 ? metrics[hit].title : null;
+    if (active === navActivePath) return; // 高亮未变化:完全不碰 DOM
+    navActivePath = active;
 
+    // 将分组标题统一为导航路径(非书签栏顶级加"书签栏 / "前缀),与节点 path 匹配
+    const navPath =
+      active && active !== "书签栏" && active.indexOf("书签栏 / ") !== 0
+        ? "书签栏 / " + active
+        : active;
+    (navNodeList || []).forEach((n) => n.classList.toggle("active", n.dataset.path === navPath));
     // 右侧书签分组同步选中状态:当前可见分组的标题高亮
-    groups.forEach((g) => {
-      g.classList.toggle("active", g.dataset.navTitle === active);
-    });
+    metrics.forEach((m) => m.el.classList.toggle("active", m.title === active));
   });
 }
 
@@ -1564,12 +1812,21 @@ function bindNavScroll() {
   const groupsEl = document.getElementById("bm-groups");
   if (!groupsEl) return;
   groupsEl.addEventListener("scroll", () => updateNavActive(), { passive: true });
+  // 窗口尺寸变化会改变分组标题换行/高度:防抖后重建度量
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      invalidateNavMetrics();
+      updateNavActive();
+    }, 200);
+  });
 }
 
 /* ===== AI 生成队列 ===== */
 async function loadInitialData() {
   // 搜索引擎(搜索栏必需,立即加载)+ API key/AUTO 开关
-  const eng = await chrome.storage.local.get([ENGINES_KEY, ENGINE_CURRENT_KEY, "enginesMerged", API_KEY_STORAGE, AUTO_KEY]);
+  const eng = await getLocal([ENGINES_KEY, ENGINE_CURRENT_KEY, "enginesMerged", API_KEY_STORAGE, AUTO_KEY]);
   if (Array.isArray(eng[ENGINES_KEY]) && eng[ENGINES_KEY].length) {
     state.engines = eng[ENGINES_KEY];
     // 一次性合并默认引擎:缺的默认引擎补到末尾,之后尊重用户删减
@@ -1798,8 +2055,12 @@ function buildApiList() {
   return list;
 }
 
-/** 从接口获取模型列表并填充下拉(带 base_url + key) */
-function loadModelList(silent) {
+/* 模型列表缓存:设置窗口每次打开都请求 /models 纯属浪费;24h 内复用(同一 Key+Base URL) */
+const MODELS_CACHE_KEY = "modelsCache";
+const MODELS_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** 从接口获取模型列表并填充下拉(带 base_url + key;force=true 绕过缓存) */
+function loadModelList(silent, force) {
   const sel = document.getElementById("set-model");
   if (!sel) return;
   const keyInput = document.getElementById("set-key");
@@ -1810,127 +2071,201 @@ function loadModelList(silent) {
     if (!silent) alert("请先填写并保存 API Key");
     return;
   }
-  try {
-    chrome.runtime.sendMessage({ type: "getDeepSeekModels", key, baseUrl: base }, (res) => {
-      if (chrome.runtime.lastError || !res || res.status !== "ok" || !Array.isArray(res.models) || !res.models.length) {
-        if (!silent) alert("获取模型列表失败,请检查 Base URL 与 API Key");
-        return;
-      }
-      const cur = sel.value || state.model;
-      sel.innerHTML = "";
-      for (const id of res.models) {
-        const opt = document.createElement("option");
-        opt.value = id;
-        opt.textContent = id;
-        sel.appendChild(opt);
-      }
-      if (res.models.indexOf(cur) >= 0) sel.value = cur;
-      else { sel.value = res.models[0]; state.model = res.models[0]; }
-    });
-  } catch (e) {
-    if (!silent) alert("获取模型列表失败");
+  const sig = base + "|" + key.slice(-6);
+
+  const apply = (models) => {
+    if (!Array.isArray(models) || !models.length) return;
+    const cur = sel.value || state.model;
+    sel.innerHTML = "";
+    for (const id of models) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = id;
+      sel.appendChild(opt);
+    }
+    if (models.indexOf(cur) >= 0) sel.value = cur;
+    else { sel.value = models[0]; state.model = models[0]; }
+  };
+
+  const request = () => {
+    try {
+      chrome.runtime.sendMessage({ type: "getDeepSeekModels", key, baseUrl: base }, (res) => {
+        if (chrome.runtime.lastError || !res || res.status !== "ok" || !Array.isArray(res.models) || !res.models.length) {
+          if (!silent) alert("获取模型列表失败,请检查 Base URL 与 API Key");
+          return;
+        }
+        const cache = { t: Date.now(), sig, models: res.models };
+        window.__modelsCache = cache;
+        try { chrome.storage.local.set({ [MODELS_CACHE_KEY]: cache }); } catch (e) { /* 忽略 */ }
+        apply(res.models);
+      });
+    } catch (e) {
+      if (!silent) alert("获取模型列表失败");
+    }
+  };
+
+  if (!force) {
+    const mem = window.__modelsCache;
+    if (mem && mem.sig === sig && Date.now() - mem.t < MODELS_TTL_MS) { apply(mem.models); return; }
+    try {
+      chrome.storage.local.get(MODELS_CACHE_KEY).then((r) => {
+        const c = r[MODELS_CACHE_KEY];
+        if (c && c.sig === sig && Date.now() - c.t < MODELS_TTL_MS && Array.isArray(c.models)) {
+          window.__modelsCache = c;
+          apply(c.models);
+        } else {
+          request();
+        }
+      }).catch(request);
+      return;
+    } catch (e) { /* 落到 request */ }
   }
+  request();
+}
+
+/* 接口状态缓存:鸣谢页签每次点开都全量探测十几个接口(HEAD+GET),5 分钟内复用结果 */
+const API_CHECK_TTL_MS = 5 * 60 * 1000;
+let apiCheckCache = null;   // { t, results, hasKey }
+let apiCheckInFlight = false;
+
+/** 把检测结果写回状态列(可重复调用:结果来自缓存时同样走这里) */
+function applyApiStatus(results, hasKey) {
+  const apiList = window._apiList || [];
+  apiList.forEach((api, i) => {
+    const el = document.querySelector('.api-status[data-idx="' + i + '"]');
+    if (!el) return;
+    const r = results ? results[api.url] : null;
+    if ((r && r.skipped) || (/deepseek/i.test(api.url) && !hasKey)) {
+      el.textContent = "未配置 Key";
+      el.className = "api-status warn";
+      return;
+    }
+    if (r && r.ok) {
+      el.textContent = "✓ 可用";
+      el.className = "api-status ok";
+    } else {
+      el.textContent = "✗ 不可用" + (r && r.status ? " (" + r.status + ")" : "");
+      el.className = "api-status fail";
+    }
+  });
 }
 
 function renderApiList() {
   const box = document.getElementById("api-list-body");
   if (!box) return;
   // 立即渲染当前已知注册表(避免第一次打开空白),再异步补全后台注册表
-  renderApiListInner();
-  try {
-    chrome.runtime.sendMessage({ type: "getApiRegistry" }, (res) => {
-      if (!chrome.runtime.lastError && res && res.status === "ok") {
-        window._bgApis = res.registry || [];
-      }
-      renderApiListInner(); // 补全后刷新(状态重新检测)
-    });
-  } catch (e) { /* 忽略 */ }
-  function renderApiListInner() {
+  const draw = () => {
     const apiList = buildApiList();
     window._apiList = apiList;
     box.innerHTML = "";
-  apiList.forEach((api, i) => {
-    const row = document.createElement("div");
-    row.className = "api-row";
-    const info = document.createElement("div");
-    info.className = "api-info";
-    const name = document.createElement("div");
-    name.className = "api-name";
-    name.textContent = api.name;
-    const desc = document.createElement("div");
-    desc.className = "api-desc";
-    desc.textContent = api.desc;
-    const addr = document.createElement("div");
-    addr.className = "api-url";
-    addr.textContent = api.url;
-    addr.title = api.url;
-    info.append(name, desc, addr);
-    const status = document.createElement("span");
-    status.className = "api-status checking";
-    status.textContent = "检测中…";
-    status.dataset.idx = String(i);
-    row.append(info, status);
+    apiList.forEach((api, i) => {
+      const row = document.createElement("div");
+      row.className = "api-row";
+      const info = document.createElement("div");
+      info.className = "api-info";
+      const name = document.createElement("div");
+      name.className = "api-name";
+      name.textContent = api.name;
+      const desc = document.createElement("div");
+      desc.className = "api-desc";
+      desc.textContent = api.desc;
+      const addr = document.createElement("div");
+      addr.className = "api-url";
+      addr.textContent = api.url;
+      addr.title = api.url;
+      info.append(name, desc, addr);
+      const status = document.createElement("span");
+      status.className = "api-status checking";
+      status.textContent = "检测中…";
+      status.dataset.idx = String(i);
+      row.append(info, status);
       box.appendChild(row);
     });
-    checkApis();
+    if (apiCheckCache && Date.now() - apiCheckCache.t < API_CHECK_TTL_MS) {
+      applyApiStatus(apiCheckCache.results, apiCheckCache.hasKey); // 命中缓存:不再打网络
+    } else {
+      checkApis();
+    }
+  };
+  draw();
+  if (!window.__bgApisLoaded) {
+    try {
+      chrome.runtime.sendMessage({ type: "getApiRegistry" }, (res) => {
+        window.__bgApisLoaded = true;
+        if (!chrome.runtime.lastError && res && res.status === "ok") {
+          window._bgApis = res.registry || [];
+        }
+        draw(); // 补全后台注册表后重绘(有缓存则只重绘,不重复探测)
+      });
+    } catch (e) { /* 忽略 */ }
   }
 }
 
-function checkApis() {
+function checkApis(force) {
   const apiList = window._apiList || buildApiList();
+  if (apiCheckInFlight) return; // 避免首次打开时内层/外层各探一遍
+  if (!force && apiCheckCache && Date.now() - apiCheckCache.t < API_CHECK_TTL_MS) {
+    applyApiStatus(apiCheckCache.results, apiCheckCache.hasKey);
+    return;
+  }
   const urls = apiList.map((a) => a.url);
   // API Key 来源:输入框当前值优先,其次 storage 已保存的 key
   const keyInput = document.getElementById("set-key");
   const inputKey = keyInput ? keyInput.value.trim() : "";
+  apiCheckInFlight = true;
   chrome.storage.local.get(API_KEY_STORAGE).then((r) => {
-    const apiKey = inputKey || r[API_KEY_STORAGE] || "";
-    doCheckApis(apiKey);
+    doCheckApis(inputKey || r[API_KEY_STORAGE] || "");
   }).catch(() => doCheckApis(inputKey));
-  function doCheckApis(apiKey) {
-  try {
-    chrome.runtime.sendMessage({ type: "checkApis", urls, apiKey }, (res) => {
-      if (chrome.runtime.lastError) {
-        // Service Worker 无此分支:通常是扩展未重新加载/浏览器未重启
-        document.querySelectorAll(".api-status").forEach((el) => {
-          el.textContent = "请重启浏览器";
-          el.className = "api-status warn";
-        });
-        return;
-      }
-      if (!res || res.status !== "ok") {
-        document.querySelectorAll(".api-status").forEach((el) => {
-          el.textContent = "检测失败";
-          el.className = "api-status fail";
-        });
-        return;
-      }
-      const hasKey = (apiKey || "").trim().length > 0;
-      apiList.forEach((api, i) => {
-        const el = document.querySelector('.api-status[data-idx="' + i + '"]');
-        if (!el) return;
-        const st = res.results[api.url] || {};
-        if (st.skipped || (/deepseek/i.test(api.url) && !hasKey)) {
-          el.textContent = "未配置 Key";
-          el.className = "api-status warn";
-          return;
-        }
-        const r = res.results[api.url];
-        if (r && r.ok) {
-          el.textContent = "✓ 可用";
-          el.className = "api-status ok";
-        } else {
-          el.textContent = "✗ 不可用" + (r && r.status ? " (" + r.status + ")" : "");
-          el.className = "api-status fail";
-        }
-      });
-    });
-  } catch (e) {
+
+  function failAll(text, cls) {
     document.querySelectorAll(".api-status").forEach((el) => {
-      el.textContent = "检测失败";
-      el.className = "api-status fail";
+      el.textContent = text;
+      el.className = "api-status " + cls;
     });
   }
+  function doCheckApis(apiKey) {
+    const hasKey = (apiKey || "").trim().length > 0;
+    try {
+      chrome.runtime.sendMessage({ type: "checkApis", urls, apiKey }, (res) => {
+        apiCheckInFlight = false;
+        if (chrome.runtime.lastError) { failAll("请重启浏览器", "warn"); return; } // SW 无此分支:通常需重新加载扩展
+        if (!res || res.status !== "ok") { failAll("检测失败", "fail"); return; }
+        apiCheckCache = { t: Date.now(), results: res.results, hasKey };
+        applyApiStatus(res.results, hasKey);
+      });
+    } catch (e) {
+      apiCheckInFlight = false;
+      failAll("检测失败", "fail");
+    }
   }
+}
+
+/* 名言释义缓存:旧实现用 "quoteExplain_<全文>" 当 storage key,用过一句就永久留一条,
+ * 存储无限增长(且梦想之车的缓存清理会全库扫描)。改成一张有界 map,最多 200 条。 */
+const QUOTE_EXPLAIN_KEY = "quoteExplains";
+const QUOTE_EXPLAIN_MAX = 200;
+
+async function getQuoteExplain(text) {
+  try {
+    const r = await chrome.storage.local.get(QUOTE_EXPLAIN_KEY);
+    const map = r[QUOTE_EXPLAIN_KEY];
+    return (map && map[text]) || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+async function setQuoteExplain(text, val) {
+  if (!text || !val) return;
+  try {
+    const r = await chrome.storage.local.get(QUOTE_EXPLAIN_KEY);
+    const map = Object.assign({}, r[QUOTE_EXPLAIN_KEY] || {});
+    map[text] = val;
+    const keys = Object.keys(map);
+    // 对象键保持插入序:超限时丢弃最早写入的
+    for (const k of keys.slice(0, Math.max(0, keys.length - QUOTE_EXPLAIN_MAX))) delete map[k];
+    await chrome.storage.local.set({ [QUOTE_EXPLAIN_KEY]: map });
+  } catch (e) { /* 忽略 */ }
 }
 
 /** AI 生成名言释义(DeepSeek,按文本缓存),显示在名言下一行 */
@@ -1946,12 +2281,8 @@ async function explainQuoteText(text, from) {
       return;
     }
   } catch (e) { /* 忽略 */ }
-  // 缓存 key 直接用文本原文(旧版按 hash 取模,不同名言可能碰撞显示错缓存)
-  const cacheKey = "quoteExplain_" + text;
-  try {
-    const cached = await chrome.storage.local.get(cacheKey);
-    if (cached[cacheKey]) { box.textContent = "释义:" + cached[cacheKey]; box.hidden = false; return; }
-  } catch (e) { /* 忽略 */ }
+  const cachedText = await getQuoteExplain(text);
+  if (cachedText) { box.textContent = "释义:" + cachedText; box.hidden = false; return; }
   box.textContent = "释义:生成中…";
   box.hidden = false;
   // 重试机制:端口关闭/超时自动重试(最多 3 次)
@@ -1973,7 +2304,7 @@ async function explainQuoteText(text, from) {
         }
         box.textContent = "释义:" + res.explain;
         box.hidden = false;
-        try { chrome.storage.local.set({ [cacheKey]: res.explain }); } catch (e) { /* 忽略 */ }
+        setQuoteExplain(text, res.explain); // 有界缓存(最多 200 条)
       });
     } catch (e) {
       if (attempt < 2) { setTimeout(() => tryExplain(attempt + 1), 800); return; }
@@ -2012,7 +2343,16 @@ function sendDescribe(url, title) {
     } catch (e) {
       done({ status: "failed" });
     }
-    setTimeout(() => done({ status: "timeout" }), 9000); // 9s 兜底:超时按失败跳过
+    setTimeout(() => done({ status: "timeout" }), 30000); // 后台最坏 8s 抓页 + 15s AI,9s 会误判超时
+  });
+}
+
+/** 生成开始/结束:只改"空描述占位"文案,不整栏重建(旧实现每次重排全部卡片) */
+function patchGeneratingPlaceholders() {
+  if (document.body.classList.contains("mode-clean")) return;
+  const msg = state.generating ? "生成中…" : "✨ 点右上角\"一键 AI 生成\"";
+  document.querySelectorAll(".bm-desc.desc-empty").forEach((d) => {
+    if (d.textContent !== msg) d.textContent = msg;
   });
 }
 
@@ -2028,7 +2368,7 @@ async function runDescribeQueue() {
   }
 
   state.generating = true;
-  renderBookmarks();
+  patchGeneratingPlaceholders();
   updateGenButton("生成中 0/" + pending.length + "…", true);
 
   let done = 0;
@@ -2059,13 +2399,15 @@ async function runDescribeQueue() {
   }
 
   state.generating = false;
-  renderBookmarks();
+  patchGeneratingPlaceholders();
   updateGenButton("✨ 一键 AI 生成", false);
 }
 
 /* ===== 快捷方式 ===== */
-let qlPageSize = 14; // 每页数量(自适应:按窗口高度计算行数) // 每页快捷方式数量(2 列 × 7 行)
+let qlPageSize = 14; // 每页数量(自适应:按窗口高度计算行数)
 let quickPage = 0;              // 当前页(0 起)
+let quickLinksRevision = 0;     // 数据版本:侧页缓存签名用
+let quickLinksDirty = false;    // 清爽模式期间收到更新:切回网格时补渲染
 
 /** 翻页(左右平移动画):direction=1 下一页,-1 上一页 */
 
@@ -2086,6 +2428,7 @@ function turnPageTo(p) {
 
   if (dir === 1 && ng) {
     // 下一页:当前页平铺滑出左,下一页(右侧层)平铺滑到原位
+    renderSidePage(ng, p); // 旁页平时不渲染:动画前按需补上
     grid.style.transition = "transform 0.18s ease";
     grid.style.transform = "translateX(-" + W + "px)";
     ng.style.transition = "transform 0.18s ease";
@@ -2098,6 +2441,7 @@ function turnPageTo(p) {
     }, 180);
   } else if (dir === -1 && pg) {
     // 上一页:当前页平铺滑出右,前一页(左侧层)滑到原位
+    renderSidePage(pg, p); // 旁页平时不渲染:动画前按需补上
     grid.style.transition = "transform 0.18s ease";
     grid.style.transform = "translateX(" + W + "px)";
     pg.style.transition = "transform 0.18s ease";
@@ -2313,8 +2657,10 @@ function getQlTotalPages() {
 
 function renderQuickLinks() {
   // 清爽模式守卫:不渲染网格内容
-  if (document.body.classList.contains("mode-clean")) return;
+  if (document.body.classList.contains("mode-clean")) { quickLinksDirty = true; return; }
+  quickLinksDirty = false;
   const grid = document.getElementById("ql-grid");
+  if (!grid) return;
   grid.style.transform = ""; // 重置拖动/动画遗留的位移
   grid.innerHTML = "";
   let dragIndex = null; // 正在拖拽的源下标(闭包内共享)
@@ -2342,12 +2688,13 @@ function renderQuickLinks() {
       qlStartDrag(e, i, a);
     });
 
-    // 阴影颜色:默认随机柔和色,图标加载成功后从图标提取
-    a.style.setProperty("--glow-color", randomGlow());
+    // 阴影颜色:已缓存过主色就直接用,否则先随机、图标加载后取色覆盖
+    a.style.setProperty("--glow-color", glowColorCache.get(q.url) || randomGlow());
 
     // 图标:有 favicon 显示,否则显示名称首字默认图标(随机底色)
     const icon = makeQuickIcon(q, (img) => {
-      const c = extractColor(img);
+      if (glowColorCache.has(q.url)) return;
+      const c = glowColorOf(q.url, img);
       if (c) a.style.setProperty("--glow-color", c);
     });
 
@@ -2430,21 +2777,45 @@ function renderQuickLinks() {
   }
 
 
-  // 渲染"前一页/下一页"旁页层(拖动时露出),简化卡片
-  renderSidePage(document.getElementById("ql-grid-prev"), quickPage - 1);
-  renderSidePage(document.getElementById("ql-grid-next"), quickPage + 1);
+  // 旁页层(前一页/下一页)只在拖拽或翻页动画时需要:平时不渲染,
+  // 避免每次 renderQuickLinks 都多建 2 页(28 个图标 + 28 张 favicon 请求)
+  const prevBox = document.getElementById("ql-grid-prev");
+  const nextBox = document.getElementById("ql-grid-next");
+  if (qlDrag) {
+    renderSidePage(prevBox, quickPage - 1);
+    renderSidePage(nextBox, quickPage + 1);
+  } else {
+    clearSidePage(prevBox);
+    clearSidePage(nextBox);
+  }
 
   renderPager(totalPages);
 }
 
-/** 渲染旁页(前一页/下一页)到指定容器:简化卡片(图标+名称+链接+悬浮预览) */
-function renderSidePage(container, pageIdx) {
+/** 清空旁页层(并使其缓存签名失效) */
+function clearSidePage(container) {
   if (!container) return;
   container.innerHTML = "";
   container.style.transform = "";
-  if (pageIdx < 0) return; // 无前一页
+  container.__sig = "";
+}
+
+/** 渲染旁页(前一页/下一页)到指定容器:简化卡片(图标+名称+链接+悬浮预览)
+ * 签名未变时复用已有节点——拖拽/翻页期间会反复调用,避免重复建 DOM 与图标请求 */
+function renderSidePage(container, pageIdx) {
+  if (!container) return;
+  if (pageIdx < 0) { clearSidePage(container); return; } // 无前一页
+  const sig = [pageIdx, qlPageSize, quickLinksRevision, state.showQuickNames ? 1 : 0].join("|");
+  if (container.__sig === sig) {
+    container.style.transform = "";
+    return;
+  }
+  container.__sig = sig;
+  container.innerHTML = "";
+  container.style.transform = "";
   const startIdx = pageIdx * qlPageSize;
   const items = state.quickLinks.slice(startIdx, startIdx + qlPageSize);
+  if (!items.length) return;
   items.forEach((q) => {
     const a = document.createElement("a");
     a.className = "ql-item";
@@ -2482,6 +2853,7 @@ function renderPager(totalPages) {
 }
 
 async function persistQuick() {
+  quickLinksRevision++; // 侧页缓存失效
   await chrome.storage.local.set({ [QUICK_KEY]: state.quickLinks });
 }
 
@@ -2809,7 +3181,7 @@ function readBlurSliders() {
 
 /** 读取保存的五类磨砂度(与默认合并) */
 async function getBlurPrefs() {
-  const { [BLUR_KEY]: saved } = await chrome.storage.local.get(BLUR_KEY);
+  const { [BLUR_KEY]: saved } = await getLocal(BLUR_KEY);
   return { ...DEFAULT_BLURS, ...(saved || {}) };
 }
 
@@ -2844,7 +3216,7 @@ function readAlphaSliders() {
 
 /** 读取保存的五类透明度(与默认合并) */
 async function getAlphaPrefs() {
-  const { [ALPHA_KEY]: saved } = await chrome.storage.local.get(ALPHA_KEY);
+  const { [ALPHA_KEY]: saved } = await getLocal(ALPHA_KEY);
   return { ...DEFAULT_ALPHAS, ...(saved || {}) };
 }
 
@@ -2871,7 +3243,7 @@ function applyCleanBg(style) {
 
 /** 读取保存的清爽背景样式(与默认合并) */
 async function getCleanBgPrefs() {
-  const { [CLEAN_BG_KEY]: saved } = await chrome.storage.local.get(CLEAN_BG_KEY);
+  const { [CLEAN_BG_KEY]: saved } = await getLocal(CLEAN_BG_KEY);
   return { ...DEFAULT_CLEAN_BG, ...(saved || {}) };
 }
 
@@ -3015,13 +3387,17 @@ function applyWallpaper(url) {
   bg.style.backgroundImage = "url('" + url + "')";
   bg.style.backgroundSize = "cover";
   bg.style.backgroundPosition = "center";
-  bg.classList.add("has-image");
+  bg.classList.remove("has-color"); // 壁纸优先于纯色:关掉纯色层
+  bg.classList.add("has-image");    // 关掉渐变动画层
 }
 
 function nextWallpaper() {
   // 清除背景色设置(壁纸优先)
   const bgEl = document.getElementById("bg");
-  if (bgEl) bgEl.style.background = "";
+  if (bgEl) {
+    bgEl.style.background = "";
+    bgEl.classList.remove("has-color");
+  }
   try { chrome.storage.local.remove(BG_COLOR_KEY); } catch (e) { /* 忽略 */ }
   let url = null;
   if (wpList.length) {
@@ -3196,7 +3572,7 @@ function initWeatherToggle() {
   const tg = document.getElementById("weather-effect-toggle");
   if (!tg) return;
   try {
-    chrome.storage.local.get(WEATHER_EFFECT_KEY).then(({ [WEATHER_EFFECT_KEY]: v }) => {
+    getLocal(WEATHER_EFFECT_KEY).then(({ [WEATHER_EFFECT_KEY]: v }) => {
       effectState.enabled = v !== false; // 默认开启
       tg.classList.toggle("active", effectState.enabled);
     });
@@ -3229,35 +3605,13 @@ function initWindmill() {
   // 恢复上次保存的背景
   restoreWallpaper();
 
-  // 风车旋转:JS 驱动,速度经指数平滑过渡,加速/减速流畅无跳变
-  // 默认 30 deg/s(12s/圈)缓转;点击目标速度 720 deg/s(0.5s/圈),1.6s 后恢复
-  let angle = 0;
-  let speed = 30;
-  let targetSpeed = 30;
-  let last = performance.now();
-  let raf = null;
-
-  let lastFrame = 0;
-  function tick(now) {
-    raf = requestAnimationFrame(tick);
-    // 约 30fps 更新:视觉仍流畅,大幅降低主线程占用(消除卡顿)
-    if (now - lastFrame < 33) return;
-    lastFrame = now;
-    const dt = Math.min(0.1, (now - last) / 1000);
-    last = now;
-    // 指数平滑:速度平滑趋向目标,加速/减速过渡自然
-    speed += (targetSpeed - speed) * Math.min(1, dt * 5);
-    angle = (angle + speed * dt) % 360;
-    blade.style.transform = "rotate(" + angle.toFixed(1) + "deg)";
-  }
-  raf = requestAnimationFrame(tick);
-
+  // 风车旋转交给 CSS 动画(合成器线程):旧实现用 rAF 每帧写 transform,
+  // 30fps 永久占用主线程,是新标签页常驻时的三大空闲开销之一。
+  // 点击时加 .spin-fast 让 CSS 用更短的 animation-duration 加速 1.6s。
   wm.addEventListener("click", () => {
-    targetSpeed = 720; // 点击加速
+    wm.classList.add("spin-fast");
     clearTimeout(wm._spinTimer);
-    wm._spinTimer = setTimeout(() => {
-      targetSpeed = 30; // 恢复缓转
-    }, 1600);
+    wm._spinTimer = setTimeout(() => wm.classList.remove("spin-fast"), 1600);
     // 更换背景
     nextWallpaper();
   });
@@ -3294,6 +3648,14 @@ function applyHomeMode(mode) {
   // 白噪音:切换到清爽模式时暂停播放(轻量模式),切回网格时恢复
   if (clean) { if (window.__noiseSuspend) window.__noiseSuspend(); }
   else { if (window.__noiseResume) window.__noiseResume(); }
+  // 天气粒子层是 .main-row 的兄弟节点,清爽模式隐藏三栏后它仍会全屏动画:
+  // 切清爽时清空,切回时按当前天气重放(清爽模式保持零常驻动画)。
+  if (clean) {
+    clearWeatherEffect();
+    hideThumb(); // 悬浮预览在 .main-row 之外,切清爽时一并收起
+  } else {
+    applyWeatherEffect();
+  }
   const gridIcon = document.getElementById("mode-icon-grid");
   const leafIcon = document.getElementById("mode-icon-clean");
   const btn = document.getElementById("btn-mode");
@@ -3325,6 +3687,9 @@ function applyHomeMode(mode) {
       const shift = parseFloat(window.getComputedStyle(sb).marginTop) || 0;
       recalcQlPageSize(ql.clientHeight + shift);
     }
+    // 清爽模式期间收到的数据更新被跳过了:切回网格时补渲染(只补脏的)
+    if (bookmarkDirty) renderBookmarks();
+    if (quickLinksDirty) renderQuickLinks();
   }
   // 模式已确定(首次恢复完成):解锁门控,后续任务按当前模式即时执行
   window.__gridLocked = false;
@@ -3378,8 +3743,64 @@ function initDonateZoom() {
   });
 }
 
+/* ===== 设置弹窗「组件」页签:卡片行由 CARD_META 生成 =====
+ * 唯一数据源在 gridgate.js(全模式加载),避免 index.html 里 14 行重复标记与默认档位漂移。 */
+const EYE_SVG =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_SLASH_SVG =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><path d="M1 1l22 22"/></svg>';
+
+function renderCardHeightRows() {
+  const list = document.querySelector(".card-height-list");
+  if (!list || list.childElementCount) return; // 已生成/已有静态行
+  const meta = window.CARD_META || [];
+  if (!meta.length) return;
+  const frag = document.createDocumentFragment();
+  for (const c of meta) {
+    const row = document.createElement("div");
+    row.className = "card-height-row";
+
+    const name = document.createElement("span");
+    name.className = "card-height-name";
+    name.textContent = c.name;
+
+    const eye = document.createElement("button");
+    eye.type = "button";
+    eye.className = "card-eye";
+    eye.dataset.card = c.key;
+    eye.title = "显示 / 隐藏组件";
+    eye.innerHTML = EYE_SVG;
+
+    const opts = document.createElement("div");
+    opts.className = "card-height-opts";
+    opts.dataset.card = c.key;
+    for (const v of [1, 2, 3, 4]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "alpha-default";
+      b.dataset.v = String(v);
+      b.textContent = v + "/4";
+      opts.appendChild(b);
+    }
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "alpha-default card-height-reset";
+    reset.dataset.card = c.key;
+    reset.title = "恢复默认高度(" + c.def + "/4)";
+    reset.textContent = "默认";
+
+    row.append(name, eye, opts, reset);
+    frag.appendChild(row);
+  }
+  list.appendChild(frag);
+}
+
 async function init() {
   document.body.classList.add("no-anim"); // 初始化期间禁用模式切换过渡(刷新不播放动画)
+  // 首屏一次性预读:后续 getLocal 命中快照,少 10+ 次 storage IPC
+  try { bootStore = await chrome.storage.local.get(BOOT_KEYS); } catch (e) { bootStore = null; }
+  renderCardHeightRows(); // 设置面板卡片行(须早于下方 cardHeightOpts 绑定)
   alignSettingsFab();
   window.addEventListener("resize", () => {
     alignSettingsFab();
@@ -3388,6 +3809,8 @@ async function init() {
   initModeSwitch(); // 清爽 / 网格模式切换(完成后移除 no-anim)
   updateCleanShift(); // 计算初始搜索栏居中位移
   createNavTooltip(); // 导航路径提示
+  initNavDelegates(); // 导航点击 / 折叠 / tooltip:容器级事件委托
+  initBookmarkDelegates(); // 书签卡悬停 / 维护按钮 / 图标:容器级事件委托
   createThumbPopup();
   initWeatherToggle(); // 天气卡片效果开关
   initDonateZoom(); // 鸣谢页付款码点击放大
@@ -3412,10 +3835,8 @@ async function init() {
   initCardBlur();  // 恢复保存的卡片磨砂度
   initCleanBg();   // 恢复保存的清爽模式背景样式
   initWindmill();
-  updateClock();
+  startClock(); // 分钟对齐唤醒(替代 setInterval 1s)
   initQlResponsive(); // 快捷方式分页自适应窗口高度
-
-  setInterval(updateClock, 1000);
   if (window.__whenGrid) window.__whenGrid(fetchQuote); // 名言(网络 API):清爽模式刷新时不请求,切回网格再加载
   else fetchQuote();
   const quoteCard = document.getElementById("quote-card");
@@ -3467,7 +3888,7 @@ async function init() {
   const quickNameToggle = document.getElementById("set-quick-name");
   if (quickNameToggle) {
     try {
-      chrome.storage.local.get(QL_NAME_KEY).then(({ [QL_NAME_KEY]: v }) => {
+      getLocal(QL_NAME_KEY).then(({ [QL_NAME_KEY]: v }) => {
         state.showQuickNames = v !== false; // 默认显示
         quickNameToggle.checked = state.showQuickNames;
       });
@@ -3483,7 +3904,7 @@ async function init() {
 
   // 模型列表刷新按钮
   const refreshModels = document.getElementById("btn-refresh-models");
-  if (refreshModels) refreshModels.addEventListener("click", () => loadModelList(false));
+  if (refreshModels) refreshModels.addEventListener("click", () => loadModelList(false, true)); // 手动点=强制刷新
 
   // 设置弹窗标签页切换(常规/外观/AI/组件/数据/鸣谢)
   const settingsTabs = document.querySelectorAll(".settings-tab");
@@ -3507,11 +3928,11 @@ async function init() {
 
   // 接口列表(位于鸣谢页签内)
   const apiRecheck = document.getElementById("btn-api-recheck");
-  if (apiRecheck) apiRecheck.addEventListener("click", renderApiList);
+  if (apiRecheck) apiRecheck.addEventListener("click", () => { apiCheckCache = null; renderApiList(); }); // 清缓存后重新探测
 
   // 加载已保存的模型与 Base URL
   try {
-    chrome.storage.local.get([MODEL_KEY, BASE_URL_KEY]).then((r) => {
+    getLocal([MODEL_KEY, BASE_URL_KEY]).then((r) => {
       if (r[MODEL_KEY]) state.model = r[MODEL_KEY];
       if (r[BASE_URL_KEY]) state.baseUrl = r[BASE_URL_KEY];
     });
@@ -3522,7 +3943,7 @@ async function init() {
     const toggle = document.getElementById(id);
     if (!toggle) return;
     try {
-      chrome.storage.local.get(storageKey).then(({ [storageKey]: v }) => {
+      getLocal(storageKey).then(({ [storageKey]: v }) => {
         state[stateKey] = v !== false; // 默认显示
         toggle.checked = state[stateKey];
       });
@@ -3545,7 +3966,7 @@ async function init() {
       document.body.classList.toggle("fab-auto", flag);
     };
     try {
-      chrome.storage.local.get(FAB_AUTO_KEY).then(({ [FAB_AUTO_KEY]: v }) => {
+      getLocal(FAB_AUTO_KEY).then(({ [FAB_AUTO_KEY]: v }) => {
         fabAutoToggle.checked = v === true;
         applyFabAuto(v === true);
       });
@@ -3578,7 +3999,7 @@ async function init() {
       });
     });
     try {
-      chrome.storage.local.get(["cardHeights", "cardHidden"]).then((r) => {
+      getLocal(["cardHeights", "cardHidden"]).then((r) => {
         const saved = r.cardHeights || {};
         cardHeightOpts.forEach((o) => {
           const v = parseInt(saved[o.dataset.card], 10);
@@ -3637,10 +4058,6 @@ async function init() {
     });
     // 眼睛按钮:显示 / 隐藏组件(隐藏卡不参与布局与高度分配)
     // 图标:可见 = 眼睛,已隐藏 = 眼睛+斜杠(标准 eye-off,替代原来的 🙈/👁 emoji)
-    const EYE_SVG =
-      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-    const EYE_SLASH_SVG =
-      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><path d="M1 1l22 22"/></svg>';
     const cardElOf = (key) => document.getElementById(key) || document.querySelector("." + key);
     const applyEyeState = (btn, hidden) => {
       btn.innerHTML = hidden ? EYE_SLASH_SVG : EYE_SVG;
@@ -4041,6 +4458,9 @@ async function init() {
       const g = document.getElementById("ql-grid");
       const ng = document.getElementById("ql-grid-next");
       const pg = document.getElementById("ql-grid-prev");
+      // 旁页平时不渲染:开始拖拽时按需补上(拖拽跟随需要看到相邻页)
+      renderSidePage(ng, quickPage + 1);
+      renderSidePage(pg, quickPage - 1);
       swipe = { startX: e.clientX, dx: 0, pageBefore: quickPage, grid: g, next: ng, prev: pg };
       qlViewport.style.cursor = "grabbing";
       // prev/next 由 CSS left 定位(±100%),transform 0 即紧贴左右边缘
@@ -4114,6 +4534,7 @@ async function init() {
   // 天气定时自动刷新(30 分钟):天气变化时页面天气效果自动切换
   setInterval(async () => {
     if (document.body.classList.contains("mode-clean")) return; // 清爽模式不刷新天气(零网格资源)
+    if (document.hidden) return; // 标签页在后台:不必刷新
     try {
       const geo = await chrome.runtime.sendMessage({ type: "getGeoInfo" });
       renderGeoInfo(geo); // 更新天气卡片 + 重新匹配天气效果
@@ -4121,9 +4542,15 @@ async function init() {
   }, 30 * 60 * 1000);
 
   // 从其他标签页/网站切回主页时自动刷新 favicon(chrome._favicon 读最新缓存)。
-  // 只重刷已存在卡片的图标 src,不整页重建 DOM(书签/快捷方式数据变化由 storage.onChanged 驱动重渲染)
+  // 只重刷已存在卡片的图标 src,不整页重建 DOM(书签/快捷方式数据变化由 storage.onChanged 驱动重渲染)。
+  // 限频:旧实现每次切回都把所有图标换成新时间戳 URL,几百张卡时切标签页明显卡顿。
+  let lastIconRefresh = 0;
+  const ICON_REFRESH_MIN_MS = 3 * 60 * 1000;
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
+    updateClock(); // 后台期间定时器被节流:回前台立即对齐
+    if (Date.now() - lastIconRefresh < ICON_REFRESH_MIN_MS) return;
+    lastIconRefresh = Date.now();
     faviconStamp = Date.now(); // 强制 favicon 重新从 Chrome 缓存获取(访问过的站点图标会刷新)
     document.querySelectorAll(".bm-card").forEach((card) => {
       const img = card.querySelector(".bm-icon img");
@@ -4154,34 +4581,52 @@ async function init() {
     qlTimer = setTimeout(() => renderQuickLinks(), 250);
   }
 
-  // 实时监听:收藏夹 / 标题 / 描述 / 失败标记 / 手动标记 → 仅刷新收藏夹
+  // 实时监听:收藏夹 / 标题 / 描述 / 失败标记 / 手动标记 → 只更新变化的卡片
+  // 差分出真正变化的 url(后台整表写入,实际每次只有一两个 key 变了)
+  function changedMapKeys(change) {
+    const before = change.oldValue || {};
+    const after = change.newValue || {};
+    const urls = [];
+    for (const k in after) if (before[k] !== after[k]) urls.push(k);
+    for (const k in before) if (!(k in after)) urls.push(k); // 删除的 key
+    return urls;
+  }
+
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "session" && changes[BOOKMARK_KEY]) {
       state.bookmarks = changes[BOOKMARK_KEY].newValue || [];
-      scheduleBookmarksRerender();
+      scheduleBookmarksRerender(); // 书签结构变化:需整栏重建
     }
     if (area === "local" && changes[DESC_KEY]) {
-      Object.assign(state.descriptions, changes[DESC_KEY].newValue || {});
-      scheduleBookmarksRerender();
+      const urls = changedMapKeys(changes[DESC_KEY]);
+      state.descriptions = changes[DESC_KEY].newValue || {};
+      if (!patchBookmarkCards(urls)) scheduleBookmarksRerender();
     }
     if (area === "local" && changes[TITLE_KEY]) {
-      Object.assign(state.titles, changes[TITLE_KEY].newValue || {});
-      scheduleBookmarksRerender();
+      const urls = changedMapKeys(changes[TITLE_KEY]);
+      state.titles = changes[TITLE_KEY].newValue || {};
+      if (!patchBookmarkCards(urls)) scheduleBookmarksRerender();
     }
     if (area === "local" && changes[DESC_FAIL_KEY]) {
-      Object.assign(state.failed, changes[DESC_FAIL_KEY].newValue || {});
-      scheduleBookmarksRerender();
+      const urls = changedMapKeys(changes[DESC_FAIL_KEY]);
+      state.failed = changes[DESC_FAIL_KEY].newValue || {};
+      if (!patchBookmarkCards(urls)) scheduleBookmarksRerender();
     }
     if (area === "local" && changes[MANUAL_KEY]) {
-      Object.assign(state.manual, changes[MANUAL_KEY].newValue || {});
-      scheduleBookmarksRerender();
+      const urls = changedMapKeys(changes[MANUAL_KEY]);
+      state.manual = changes[MANUAL_KEY].newValue || {};
+      if (!patchBookmarkCards(urls)) scheduleBookmarksRerender();
     }
     // 快捷方式变化 → 仅刷新快捷方式
     if (area === "local" && changes[QUICK_KEY]) {
+      quickLinksRevision++; // 侧页缓存失效
       state.quickLinks = changes[QUICK_KEY].newValue || [];
       scheduleQuickRerender();
     }
   });
+
+  // 初始化结束:之后的所有读取都走真实 storage,避免拿到过时快照
+  bootStore = null;
 }
 
 document.addEventListener("DOMContentLoaded", init);

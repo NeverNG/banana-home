@@ -37,20 +37,37 @@ button {
   text-shadow: var(--text-shadow);
 }
 
-/* ===== 动态渐变背景 ===== */
+/* ===== 动态渐变背景 =====
+ * 渐变由 ::before 承载并放大到 1.6 倍,动画只改 transform(合成器线程,不触发重绘/重排)。
+ * 旧实现是 animate background-position(300% 渐变),每帧都要重绘整个视口。
+ * 纯色/壁纸出现时该层用 display:none 关掉(见 .has-color / .has-image)。 */
 .bg {
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 45%, #6c8cff 100%);
-  background-size: 300% 300%;
-  animation: bgShift 16s ease infinite;
+  background: #1e3c72; /* 兜底底色 */
+  overflow: hidden;
 }
 
-@keyframes bgShift {
-  0%   { background-position: 0% 50%; }
-  50%  { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+.bg::before {
+  content: "";
+  position: absolute;
+  left: -30%;
+  top: -30%;
+  width: 160%;
+  height: 160%;
+  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 45%, #6c8cff 100%);
+  animation: bgPan 8s ease-in-out infinite alternate; /* 8s 单程 ≈ 旧版 16s 一个来回 */
+  will-change: transform;
+}
+
+@keyframes bgPan {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-8%, 5%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg::before { animation: none; }
 }
 
 /* ===== 布局 ===== */
@@ -277,6 +294,9 @@ body:not(.mode-clean) .main-row {
 
 /* 清爽模式聚焦搜索栏:搜索栏去磨砂变清晰;背景蒙版磨砂度/透明度由设置控制,失焦恢复原样 */
 .bg.has-image {
+  /* 壁纸铺满(纯色/壁纸时渐变层由下方 .bg.has-image::before 规则关闭) */
+  background-size: cover;
+  background-position: center;
   transition: filter 0.3s, transform 0.3s, opacity 0.3s;
 }
 body.mode-clean:has(.search-bar:focus-within) .search-bar {
@@ -437,6 +457,8 @@ body.mode-clean:has(.search-bar:focus-within) .bg.has-image {
   -webkit-backdrop-filter: blur(var(--bm-blur, 10px));
   transition: background 0.2s, transform 0.2s, border-color 0.2s, box-shadow 0.2s;
   min-width: 0;
+  position: relative; /* ⋯ 维护按钮的定位基准 */
+  contain: layout style; /* 单卡布局隔离:长列表滚动时减少整栏重排 */
 }
 
 .bm-card:hover {
@@ -659,9 +681,7 @@ dialog::backdrop {
 }
 
 /* ===== 卡片右下角 ⋯ 维护按钮 ===== */
-.bm-card {
-  position: relative;
-}
+/* 定位基准见 .bm-card 主块的 position:relative(原此处重复定义了一次 .bm-card) */
 
 .bm-more {
   position: absolute;
@@ -750,23 +770,6 @@ dialog::backdrop {
   height: 82px; /* 固定行高:名称显示开关不影响图标间距 */
   text-decoration: none;
   transition: transform 0.15s;
-}
-
-.ql-item:hover {
-  transform: translateY(-2px);
-}
-
-/* 阴影从里层圆角方框(ql-icon)开始,不加外层容器 */
-.ql-item:hover .ql-icon {
-  box-shadow: 0 6px 18px var(--glow-color, rgba(0, 0, 0, 0.25));
-}
-
-.ql-item:active {
-  transform: translateY(0);
-}
-
-.ql-item:active .ql-icon {
-  box-shadow: 0 3px 12px var(--glow-color, rgba(0, 0, 0, 0.25));
 }
 
 .ql-item:hover {
@@ -1221,12 +1224,29 @@ dialog::backdrop {
   height: 100%;
 }
 
-/* 风车叶片(旋转部分):旋转由 JS 驱动(requestAnimationFrame),速度平滑过渡 */
+/* 风车叶片(旋转部分):常转交给 CSS 动画(合成器线程),
+ * 旧实现用 rAF 每帧写 transform,30fps 永久占用主线程。点击时 .spin-fast 加速。 */
 .windmill-blade {
   display: block;
   width: 46px;
   height: 46px;
   will-change: transform; /* 提示浏览器走合成通道,减少卡顿 */
+  animation: windmillSpin 12s linear infinite;
+}
+
+/* 点击换背景:1.6s 内快速旋转(JS 加/移除该类) */
+.windmill-btn.spin-fast .windmill-blade {
+  animation-duration: 0.55s;
+}
+
+@keyframes windmillSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* 用户偏好减少动效:停掉装饰性旋转 */
+@media (prefers-reduced-motion: reduce) {
+  .windmill-blade { animation: none; }
 }
 
 /* 白色手柄:无圆角,上部伸入叶片白色圆形(被风车图形盖住),下部到窗口底部 */
@@ -1247,11 +1267,10 @@ dialog::backdrop {
 
 /* 背景图遮罩:为保证前景内容可读的深色压暗层已按用户要求全部移除(清爽/网格模式均显示壁纸原色) */
 
-/* 有壁纸时:图片铺满(覆盖渐变用的 300% 尺寸与动画) */
-.bg.has-image {
-  background-size: cover !important;
-  background-position: center !important;
-  animation: none;
+/* 纯色 / 壁纸:隐藏渐变层(display:none 后动画也不再推进) */
+.bg.has-image::before,
+.bg.has-color::before {
+  display: none;
 }
 
 /* 导航根节点后的书签总数 */
@@ -1495,6 +1514,13 @@ body.mode-clean .main-row {
   visibility: hidden;
   /* 淡出:opacity 先过渡,visibility 延迟 0.35s 再隐藏(期间不可交互) */
   transition: opacity 0.35s ease, visibility 0s linear 0.35s;
+}
+
+/* 清爽模式:三栏内所有 CSS 动画暂停(太极旋转/宠物睡姿等)。
+ * visibility:hidden 只跳过绘制,动画仍会按帧推进占用合成器;暂停后真正归零。
+ * 用 animation-play-state 而非 display:none,不影响布局与切回时的滚动位置。 */
+body.mode-clean .main-row * {
+  animation-play-state: paused !important;
 }
 
 /* 清爽模式:搜索栏下移到页面中部(margin-top 平移,位移由 JS 计算,窗口尺寸变化时更新) */

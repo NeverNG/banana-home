@@ -4,19 +4,38 @@
  * 清爽模式刷新时不加载三栏数据接口;main.js 的 applyHomeMode 决定执行时机并解锁。
  * 注意:必须是外部脚本文件——MV3 扩展默认 CSP 禁止内联 <script>,内联版不会执行。 */
 (function () {
+  /* 卡片元数据:全项目唯一数据源(显示名 / 默认档位 / 支持档位)。
+   * 设置面板「组件」页签的卡片行由 main.js 按此表生成,下面的 DEFAULT/SUPPORTED 也由它派生,
+   * 避免 index.html、gridgate、colpager 三处各写一份导致漂移(曾出现设置窗口提示档位与真实默认值不一致)。
+   * 新增卡片只需在这里加一行 + 在 index.html 放入对应元素。 */
+  var CARD_META = [
+    { key: "clock-card",       name: "时间",       def: 1, heights: [1] },
+    { key: "calendar-card",    name: "日历",       def: 2, heights: [1, 2] },
+    { key: "quote-card",       name: "名言警句",   def: 1, heights: [1, 2] },
+    { key: "geo-map-card",     name: "地图",       def: 2, heights: [1, 2, 3] },
+    { key: "geo-weather-card", name: "天气",       def: 1, heights: [1, 2] },
+    { key: "pet-card",         name: "宠物",       def: 1, heights: [1, 2] },
+    { key: "music-card",       name: "白噪音",     def: 1, heights: [1, 2] },
+    { key: "stock-card",       name: "股票行情",   def: 2, heights: [1, 2, 3, 4] },
+    { key: "monitor-card",     name: "系统监控",   def: 1, heights: [1] },
+    { key: "hot-card",         name: "今日热榜",   def: 2, heights: [1, 2, 3, 4] },
+    { key: "dreamcar-card",    name: "梦想之车",   def: 2, heights: [2, 3] },
+    { key: "activity-card",    name: "访问活跃度", def: 1, heights: [1, 2] },
+    { key: "poker-card",       name: "扑克牌",     def: 1, heights: [1, 2] },
+    { key: "bagua-card",       name: "八卦罗盘",   def: 2, heights: [1, 2, 3] },
+  ];
+  window.CARD_META = CARD_META;
+
   /* 各卡片默认档位(1/4-4/4)。必须挂全局:清爽模式不注入 colpager.js,
    * 但设置窗口(所有模式可用)需读取默认值标 active / 恢复默认——放这里全模式共享。 */
-  window.DEFAULT_CARD_HEIGHTS = {
-    "clock-card": 1, "calendar-card": 2, "quote-card": 1,
-    "geo-map-card": 2, "geo-weather-card": 1, "pet-card": 1,
-    "music-card": 1, "stock-card": 2, "monitor-card": 1,
-    "hot-card": 2, "dreamcar-card": 2, "activity-card": 1,
-    "poker-card": 1, "bagua-card": 2,
-  };
+  var defaults = {};
+  CARD_META.forEach(function (c) { defaults[c.key] = c.def; });
+  window.DEFAULT_CARD_HEIGHTS = defaults;
+
   /* 卡片档位变化通知注册器(多订阅)。必须定义在这里(最先加载的基础脚本):
    * calendar.js/main.js 等先于 colpager.js 注入执行,若在 colpager 里定义,
    * 它们的 onCardHeight 注册会因函数未定义而失败(日历切 1/4 不重渲染事故)。
-   * fillPage(网格模式)末尾遍历 __cardHeightCbs 统一触发;清爽模式无 fillPage,回调不执行。 */
+   * fillPage(网格模式)仅在档位真的变化时统一触发;清爽模式无 fillPage,回调不执行。 */
   window.__cardHeightCbs = window.__cardHeightCbs || [];
   window.onCardHeight = function (fn) {
     if (typeof fn === "function") window.__cardHeightCbs.push(fn);
@@ -30,22 +49,21 @@
   };
   /* 各卡片支持的高度档位(设置窗口置灰不支持项;用户设置不在支持表内时回退默认)。
    * 必须放这里:设置窗口与 colpager 都要读,清爽模式也要能读到。 */
-  window.SUPPORTED_CARD_HEIGHTS = {
-    "clock-card": [1],
-    "calendar-card": [1, 2],
-    "quote-card": [1, 2],
-    "geo-map-card": [1, 2, 3],
-    "geo-weather-card": [1, 2],
-    "pet-card": [1, 2],
-    "music-card": [1, 2],
-    "stock-card": [1, 2, 3, 4],
-    "monitor-card": [1],
-    "hot-card": [1, 2, 3, 4],
-    "dreamcar-card": [2, 3],
-    "activity-card": [1, 2],
-    "poker-card": [1, 2],
-    "bagua-card": [1, 2, 3],
+  var supported = {};
+  CARD_META.forEach(function (c) { supported[c.key] = c.heights.slice(); });
+  window.SUPPORTED_CARD_HEIGHTS = supported;
+
+  /* 卡片是否真的"在用户眼前":隐藏标签页 / 清爽模式 / 卡片被眼睛按钮隐藏 / 不在当前组件页。
+   * 供各组件定时器与动画循环做守卫(纯 classList 判断,不触发布局)。
+   * 注意:colpager.js 未注入时(清爽模式)也安全——它只做 DOM class 判断。 */
+  window.isCardVisible = function (el) {
+    if (!el || document.hidden) return false;
+    if (document.body.classList.contains("mode-clean")) return false;
+    if (el.style && el.style.display === "none") return false;
+    var page = el.closest ? el.closest(".col-page") : null;
+    return !page || page.classList.contains("active");
   };
+
   window.__gridTasks = window.__gridTasks || [];
   window.__gridLocked = true; // 模式未确定前锁定:所有网格任务排队
   window.__whenGrid = function (fn) {

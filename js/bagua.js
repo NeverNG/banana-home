@@ -371,8 +371,9 @@ function initBagua() {
     });
   }
 
-  // 跨时 / 跨天检查(30s 一次,开销可忽略)
+  // 跨时 / 跨天检查(30s 一次,开销可忽略;标签页在后台时跳过)
   setInterval(() => {
+    if (document.hidden) return;
     const el = document.getElementById("bagua-shichen");
     if (el) {
       const sc = currentShichen();

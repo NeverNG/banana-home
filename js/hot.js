@@ -81,13 +81,19 @@ const hot = { idx: 0, loading: false, lastItems: [] };
 function hotRenderList(items) {
   const box = document.getElementById("hot-list");
   if (!box) return;
-  box.innerHTML = "";
   if (!items.length) {
+    box.__sig = "";
     box.innerHTML = '<div class="widget-empty">获取失败,点击 ⇄ 重试</div>';
     return;
   }
-  // 全部条目渲染,超出卡片高度由 hot-list 纵向滚动(上限 50 条防列表过长)
-  items.slice(0, 50).forEach((item, i) => {
+  const list = items.slice(0, 50); // 上限 50 条防列表过长
+  // 同一份榜单不重建 DOM:10 分钟自动刷新时标题通常完全一致
+  const sig = String(list.length) + "\u0001" + list.map((x) => x.title).join("\u0001");
+  if (box.__sig === sig && box.childElementCount) return;
+  box.__sig = sig;
+  const scrollTop = box.scrollTop;
+  const frag = document.createDocumentFragment();
+  list.forEach((item, i) => {
     const a = document.createElement("a");
     a.className = "hot-item";
     a.href = item.url || "#";
@@ -101,8 +107,11 @@ function hotRenderList(items) {
     title.textContent = item.title;
     title.title = item.title;
     a.append(idx, title);
-    box.appendChild(a);
+    frag.appendChild(a);
   });
+  box.innerHTML = "";
+  box.appendChild(frag);
+  box.scrollTop = scrollTop; // 重建后保持滚动位置
 }
 
 /** 持久化当前选中的榜单 */
@@ -115,11 +124,12 @@ function hotSaveIdx() {
 async function hotLoad() {
   // 清爽模式守卫:会话内切到清爽模式后停止轮询(脚本仍注入,但不再请求接口)
   if (document.body.classList.contains("mode-clean")) return;
+  if (document.hidden) return; // 标签页在后台:定时刷新没意义
   const board = HOT_BOARDS[hot.idx % HOT_BOARDS.length];
+  if (hot.loading) return; // 有请求在途:不要先擦掉已渲染列表(旧实现会把列表刷成"加载中")
   hotSetActiveTab();
   const box = document.getElementById("hot-list");
-  if (box) box.innerHTML = '<div class="widget-empty">加载中…</div>';
-  if (hot.loading) return;
+  if (box && !box.childElementCount) box.innerHTML = '<div class="widget-empty">加载中…</div>';
   hot.loading = true;
   // 消息型榜单(如抖音:经后台请求)
   if (board.kind === "message") {

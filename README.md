@@ -75,10 +75,13 @@ banana-home/
 │   └── 组件脚本(仅网格模式动态注入):calendar / colpager / pet / music / monitor
 │       / hot / stock / dreamcar / poker / bagua / compass
 ├── img/                # 图标、宠物 GIF、四象 SVG、风车、收款码
-└── audio/              # 白噪音本地音效(雨/海/火/风/溪流)
+├── audio/              # 白噪音本地音效(雨/海/火/风/溪流)
+├── tests/check.js      # 开发期自检(node tests/check.js,不参与扩展运行)
+└── package.json        # 仅用于 `npm run check`,无运行时依赖
 ```
 
 > 开发与改动的**硬性规范**(资源门控、UI 风格、存储约定等)见 `AGENTS.md`,改动前务必阅读。
+> 提交前跑一次 `npm run check`(或 `node tests/check.js`):语法/门控/CSS/关键逻辑一次校验。
 
 ## 工作原理
 
@@ -103,7 +106,17 @@ Chrome 书签 ──chrome.bookmarks API──▶ background.js
 - 默认快捷方式:修改 `js/main.js` 的 `DEFAULT_QUICK`
 - 配色 / 背景动画:`css/style.css` 顶部 `:root` 变量与 `.bg`
 - 简介长度:修改 `background.js` 的 `MAX_TEXT_LEN` 与 system prompt 中的字数要求
-- 卡片默认档位:修改 `js/gridgate.js` 的 `window.DEFAULT_CARD_HEIGHTS`(清爽模式设置窗口也要读,勿放进组件脚本)
+- 卡片默认档位:修改 `js/gridgate.js` 的 `CARD_META`(显示名 / 默认档位 / 支持档位;**唯一数据源**,设置窗口的卡片行由它生成)
+
+## 性能设计(为什么它不费电)
+
+- **空闲零帧**:风车改用 CSS 动画;背景渐变改为 `transform` 合成动画(不再全视口重绘);宠物在发呆/睡觉时不排帧;频谱只在"播放中 + 卡片可见"时绘制;所有定时器都带 `window.isCardVisible()` 守卫(清爽模式 / 非当前组件页 / 标签页后台直接跳过)。
+- **事件委托**:书签卡与收藏夹导航只在容器上挂一份监听(悬停预览、维护按钮、图标回退、路径 tooltip),不再随每张卡/每个节点重建。
+- **不整栏重建**:AI 简介落盘只 patch 对应那张书签卡;快捷方式的相邻页只在拖拽/翻页时按需渲染并缓存;热榜/股票同一份数据不重建 DOM。
+- **不重复计算**:favicon 主色按 URL 缓存(画布取色只做一次);农历换算按日期缓存;接口检测/模型列表/可嵌入性结果都带 TTL 缓存。
+- **渲染回调收敛**:`fillPage` 只在"档位真的变化"时通知各组件重渲染,切页/缩放不再触发活跃度、日历等整块重建。
+- **后台轻量**:Service Worker 不再在每次唤醒时重读书签树(事件防抖 + 并发合并);写简介时只写变化的 storage key,且串行化避免并发覆盖;抓网页正文限制在前 400KB。
+- **清爽模式**:除三个基础脚本外不加载任何资源,三栏内 CSS 动画统一暂停,天气粒子层切清爽即清空。
 
 ## 已知限制
 

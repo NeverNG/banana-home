@@ -69,6 +69,7 @@
     errToken: 0,
     pruneTimer: null,
     loadToken: 0,        // 帧加载批次令牌(切色/切车时丢弃旧回调)
+    pendingFrames: false, // 因卡片不可见而推迟的帧加载(可见时补上)
     seq: { brand: 0, series: 0, spec: 0 },
   };
 
@@ -107,10 +108,24 @@
     if (r.status === "ok" || r.status === "empty") {
       try {
         await chrome.storage.local.set({ [key]: { t: Date.now(), data: r } });
+        await rememberCacheKey(key);
         schedulePrune();
       } catch (e) { /* 忽略 */ }
     }
     return r;
+  }
+
+  /* 缓存索引:清理时只读这些 key(旧实现 local.get(null) 会把几百条书签描述一起读进内存) */
+  const DC_INDEX_KEY = "dcCacheIndex";
+  async function rememberCacheKey(key) {
+    try {
+      const cur = (await chrome.storage.local.get(DC_INDEX_KEY))[DC_INDEX_KEY];
+      const idx = Array.isArray(cur) ? cur : [];
+      if (idx.indexOf(key) < 0) {
+        idx.push(key);
+        await chrome.storage.local.set({ [DC_INDEX_KEY]: idx });
+      }
+    } catch (e) { /* 忽略 */ }
   }
 
   /** 缓存清理节流:多次写入合并为一次(避免频繁全量读 storage) */
@@ -121,17 +136,23 @@
 
   async function pruneCache() {
     try {
-      const all = await chrome.storage.local.get(null);
+      const idxRaw = (await chrome.storage.local.get(DC_INDEX_KEY))[DC_INDEX_KEY];
+      if (!Array.isArray(idxRaw) || !idxRaw.length) return;
+      const idx = idxRaw.filter((k) => /^dc(Series|Specs|Pano|Brands)/.test(k));
+      if (!idx.length) return;
+      const store = await chrome.storage.local.get(idx);
       const now = Date.now();
-      const keys = Object.keys(all).filter(
-        (k) => /^dc(Series|Specs|Pano|Brands)/.test(k) && all[k] && now - all[k].t > 7 * 24 * 3600 * 1000
-      );
-      if (keys.length) await chrome.storage.local.remove(keys);
+      const stale = idx.filter((k) => store[k] && now - store[k].t > 7 * 24 * 3600 * 1000);
+      if (stale.length) {
+        await chrome.storage.local.remove(stale);
+        await chrome.storage.local.set({ [DC_INDEX_KEY]: idx.filter((k) => stale.indexOf(k) < 0) });
+      }
     } catch (e) { /* 忽略 */ }
   }
 
   function visible() {
-    // 清爽模式守卫:卡片隐藏时视为不可见(旋转循环自动停止,切回网格由 onGridResume 恢复)
+    // 统一用 gridgate 的可见性判断:清爽模式 / 非当前组件页 / 眼睛按钮隐藏 / 标签页后台 都算不可见
+    if (window.isCardVisible) return window.isCardVisible(el.card);
     if (document.body.classList.contains("mode-clean")) return false;
     const page = el.card.closest(".col-page");
     return !!page && page.classList.contains("active");
@@ -587,8 +608,13 @@
     if (!el.canvas) return;
     const r = el.stage.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    el.canvas.width = Math.max(1, Math.round(r.width * dpr));
-    el.canvas.height = Math.max(1, Math.round(r.height * dpr));
+    const w = Math.max(1, Math.round(r.width * dpr));
+    const h = Math.max(1, Math.round(r.height * dpr));
+    // 尺寸没变就不重分配位图:ResizeObserver 会随分页/模式切换反复触发,
+    // 每次重设 canvas.width 都会清空并重建后备存储
+    if (el.canvas.width === w && el.canvas.height === h) return;
+    el.canvas.width = w;
+    el.canvas.height = h;
     // 重设尺寸会清空画布,重绘当前帧避免暂停状态空白
     if (state.frames.length) drawFrame(state.frames[state.frame]);
   }
@@ -658,6 +684,10 @@
   }
 
   function loadAllFrames() {
+    // 卡片不在当前组件页 / 清爽模式:先不加载 30+ 帧(约 1MB 网络 + 几十 MB 解码内存),
+    // 标记待加载,等切到该页或切回网格时再补(旧实现每次开新标签页都全量加载)。
+    if (!visible()) { state.pendingFrames = true; return; }
+    state.pendingFrames = false;
     const token = ++state.loadToken;
     state.loaded.clear();
     el.loading.hidden = false;
@@ -795,18 +825,18 @@
     };
     el.stage.addEventListener("pointerup", endDrag);
     el.stage.addEventListener("pointercancel", endDrag);
-    // 页面切走暂停旋转
-    const mo = new MutationObserver(() => {
-      if (visible() && state.auto) startRotate();
-      else stopRotate();
-    });
+    // 页面切走暂停旋转;切回来时补上被推迟的帧加载
+    const resume = () => {
+      if (!visible()) { stopRotate(); return; }
+      if (state.pendingFrames) loadAllFrames();
+      if (state.auto) startRotate();
+    };
+    const mo = new MutationObserver(resume);
     document.querySelectorAll(".col-page").forEach((p) =>
       mo.observe(p, { attributes: true, attributeFilter: ["class"] })
     );
     // 切回网格模式:恢复自动旋转(清爽模式下 visible() 返回 false 已停止循环)
-    if (window.onGridResume) window.onGridResume(() => {
-      if (visible() && state.auto) startRotate();
-    });
+    if (window.onGridResume) window.onGridResume(resume);
   }
 
   async function init() {

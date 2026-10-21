@@ -32,6 +32,8 @@ let spectrumAnalyser = null;
 let spectrumCanvas = null;
 let spectrumRaf = 0;
 let spectrumInited = false;
+let spectrumData = null;   // 复用频域数组(旧实现每帧 new Uint8Array,持续 GC)
+let spectrumLast = 0;      // 上一帧时间戳(节流到 ~30fps)
 
 /** 初始化频谱:AudioContext + Analyser + canvas(封面 2/4+ 高度显示) */
 function noiseSpectrumInit() {
@@ -67,39 +69,77 @@ function noiseSpectrumInit() {
     window.addEventListener("resize", resize);
 
     spectrumInited = true;
-    noiseSpectrumDraw();
+    noiseSpectrumStart(); // 仅在"正在播放且可见"时才真正启动循环
   } catch (e) { /* 忽略(不支持或音频源已被占用) */ }
 }
 
-/** 绘制循环:点阵柱——每个方块 = 4 列 × 3 行白点矩阵,点小且密,柱数更多 */
-function noiseSpectrumDraw() {
+/** 是否值得逐帧绘制:播放中 + 卡片可见 + 封面频谱未被隐藏 + 标签页在前台 */
+function spectrumShouldRun() {
+  if (!noise.audio || !noise.playing) return false;
+  if (!spectrumCanvas || spectrumCanvas.style.display === "none") return false;
+  if (document.hidden) return false;
+  const card = spectrumCanvas.closest(".music-card");
+  if (window.isCardVisible && card && !window.isCardVisible(card)) return false;
+  return true;
+}
+
+function noiseSpectrumStop() {
+  if (spectrumRaf) { cancelAnimationFrame(spectrumRaf); spectrumRaf = 0; }
+  // 停帧时清一次画布(原来暂停会每帧清空,现在只需一次)
+  const cv = spectrumCanvas;
+  if (cv) {
+    const g = cv.getContext("2d");
+    if (g) g.clearRect(0, 0, cv.width, cv.height);
+  }
+}
+
+function noiseSpectrumStart() {
+  if (spectrumRaf || !spectrumInited) return;
+  if (!spectrumShouldRun()) return; // 暂停/隐藏时保持零帧
+  if (!spectrumData && spectrumAnalyser) spectrumData = new Uint8Array(spectrumAnalyser.frequencyBinCount);
+  spectrumLast = 0;
   spectrumRaf = requestAnimationFrame(noiseSpectrumDraw);
+}
+
+/** 绘制循环:点阵柱——每个方块 = 3 列 × 2 行白点矩阵 */
+function noiseSpectrumDraw(ts) {
+  spectrumRaf = 0;
   const cv = spectrumCanvas;
   const an = spectrumAnalyser;
   if (!cv || !an) return;
+  if (!spectrumShouldRun()) {
+    const g0 = cv.getContext("2d");
+    if (g0) g0.clearRect(0, 0, cv.width, cv.height); // 清掉残影后停止
+    return;
+  }
+  // ~30fps:视觉足够,画布指令量减半
+  if (ts - spectrumLast < 33) { spectrumRaf = requestAnimationFrame(noiseSpectrumDraw); return; }
+  spectrumLast = ts;
+
   const g = cv.getContext("2d");
   const w = cv.width;
   const h = cv.height;
   g.clearRect(0, 0, w, h);
-  // 未播放或音频上下文未激活:频谱静止
-  if (!spectrumCtx || spectrumCtx.state === "suspended") return;
+  if (!spectrumCtx || spectrumCtx.state === "suspended") { spectrumRaf = requestAnimationFrame(noiseSpectrumDraw); return; }
 
-  const data = new Uint8Array(an.frequencyBinCount);
+  const data = spectrumData || (spectrumData = new Uint8Array(an.frequencyBinCount));
   an.getByteFrequencyData(data);
 
-  const BARS = 44;          // 柱数(方块变小后更多)
-  const dot = 1.5;          // 圆点直径(小)
-  const cols = 3;           // 每方块横向 3 列(横三)
-  const rows = 2;           // 每方块纵向 2 行(纵二)
-  const dotGap = 0.5;       // 点间距(更密)
-  const blockW = cols * dot + (cols - 1) * dotGap; // 方块宽
-  const blockH = rows * dot + (rows - 1) * dotGap; // 方块高
+  const BARS = 44;          // 柱数
+  const dot = 1.5;          // 圆点直径
+  const cols = 3;           // 每方块横向 3 列
+  const rows = 2;           // 每方块纵向 2 行
+  const dotGap = 0.5;       // 点间距
+  const blockW = cols * dot + (cols - 1) * dotGap;
+  const blockH = rows * dot + (rows - 1) * dotGap;
   const gap = 1;            // 柱间距
-  const blockGap = dotGap;  // 方块纵向间距 = 点阵点纵向间距(视觉连续一致)
+  const blockGap = dotGap;
   const maxBlocks = Math.max(1, Math.floor((h - 6) / (blockH + blockGap)));
   const totalW = BARS * blockW + (BARS - 1) * gap;
-  const startX = Math.max(0, (w - totalW) / 2); // 整组居中
-  // 白噪音能量集中在中低频,取前 60% 频段
+  const startX = Math.max(0, (w - totalW) / 2);
+  const r = dot / 2;
+  // 全部圆点先累积到一条路径,最后只 fill 一次(旧实现每个点都 beginPath+fill)
+  g.beginPath();
   for (let i = 0; i < BARS; i++) {
     const idx = Math.floor((i / BARS) * data.length * 0.6);
     const v = data[idx] / 255;
@@ -107,17 +147,20 @@ function noiseSpectrumDraw() {
     const bx = startX + i * (blockW + gap);
     for (let b = 0; b < blocks; b++) {
       const by = h - 5 - (b + 1) * (blockH + blockGap);
-      // 3×2 白点矩阵填充方块(横三纵二)
       for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          g.beginPath();
-          g.arc(bx + c * (dot + dotGap) + dot / 2, by + r * (dot + dotGap) + dot / 2, dot / 2, 0, Math.PI * 2);
-          g.fillStyle = "rgba(255,255,255,0.55)"; // 白色点阵(半透明)
-          g.fill();
+        for (let rr = 0; rr < rows; rr++) {
+          const cx = bx + c * (dot + dotGap) + r;
+          const cy = by + rr * (dot + dotGap) + r;
+          g.moveTo(cx + r, cy);
+          g.arc(cx, cy, r, 0, Math.PI * 2);
         }
       }
     }
   }
+  g.fillStyle = "rgba(255,255,255,0.55)"; // 白色点阵(半透明)
+  g.fill();
+
+  spectrumRaf = requestAnimationFrame(noiseSpectrumDraw);
 }
 
 /** 暂停并记忆续播意图:隐藏白噪音卡片 / 切换到清爽模式时调用 */
@@ -238,8 +281,8 @@ function noiseLoad() {
       noiseRender();
     }
   };
-  a.onplay = () => { noise.playing = true; noiseSave(); noiseRender(); };
-  a.onpause = () => { noise.playing = false; noiseSave(); noiseRender(); };
+  a.onplay = () => { noise.playing = true; noiseSave(); noiseRender(); noiseSpectrumStart(); };
+  a.onpause = () => { noise.playing = false; noiseSave(); noiseRender(); noiseSpectrumStop(); };
   noiseRender();
   noiseSpectrumInit(); // 音频元素就绪后初始化频谱图(仅一次)
 }
@@ -287,16 +330,34 @@ function initMusic() {
   if (prev) prev.addEventListener("click", noisePrev);
   if (next) next.addEventListener("click", noiseNext);
   noiseRender();
-  // 档位变化:2/4+ 显示频谱图,1/4 隐藏(封面整个隐藏)
+  // 档位变化:2/4+ 显示频谱图,1/4 隐藏(封面整个隐藏);隐藏时停掉绘制循环
   window.onCardHeight && window.onCardHeight(function () {
     if (!spectrumCanvas) return;
     const card = document.querySelector(".music-card");
     spectrumCanvas.style.display =
       card && parseInt(card.dataset.height, 10) >= 2 ? "block" : "none";
+    if (spectrumCanvas.style.display === "none") noiseSpectrumStop();
+    else noiseSpectrumStart();
   });
   // 页面加载即初始化音频元素(不播放)与频谱图:2/4+ 封面频谱即时可用(未播放时静止)
   if (!noise.audio) noiseLoad();
   noiseSpectrumInit();
+  // 可见性恢复后重启频谱(切组件页 / 切标签页 / 切回网格 / 眼睛按钮显示)
+  if (window.onGridResume) window.onGridResume(noiseSpectrumStart);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) noiseSpectrumStop();
+    else noiseSpectrumStart();
+  });
+  if (typeof MutationObserver !== "undefined") {
+    const mo = new MutationObserver(() => {
+      if (spectrumShouldRun()) noiseSpectrumStart();
+      else noiseSpectrumStop();
+    });
+    document.querySelectorAll(".col-page").forEach((p) =>
+      mo.observe(p, { attributes: true, attributeFilter: ["class"] }));
+    const card = document.querySelector(".music-card");
+    if (card) mo.observe(card, { attributes: true, attributeFilter: ["style"] });
+  }
   // 恢复上次的音效选择与播放状态(刷新/导入后);
   // 优先级:因隐藏/切清爽暂停的标志(恢复续播) > 上次播放中(尝试续播)
   try {

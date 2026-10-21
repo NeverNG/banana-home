@@ -145,8 +145,14 @@ function rebuildPages() {
 }
 window.rebuildPages = rebuildPages;
 
+/* 上一次已应用的档位(key -> 1..4)。内容回调只在档位真的变化时触发:
+ * 切页 / 窗口尺寸 / 内容变化都会调用 fillPage,但只有"档位变了"才需要让
+ * 活跃度(180+ 格子)、日历(42 格农历换算)、天气、热榜等整块重渲染。 */
+const appliedHeights = new Map();
+
 /** 按绝对档位填充当前页卡片高度:卡高 = floor(可用高 × 档位/4),
- * 不做内容保底、不瓜分剩余(同档严格同高,不随内容变化) */
+ * 不做内容保底、不瓜分剩余(同档严格同高,不随内容变化)。
+ * 纯几何变化不触发内容重渲染,避免切页/缩放时的无谓 DOM 重建。 */
 function fillPage() {
   const pagesEl = document.getElementById("col-pages");
   const page = colPager.pages[colPager.idx];
@@ -154,25 +160,41 @@ function fillPage() {
   // 预留底部空间:分页圆点区域(bottom 8 + 圆点 17 + 余量)
   const avail = pagesEl.clientHeight - 40;
   if (avail <= 0) return;
-  // 先重置全部子元素 minHeight/height(含隐藏卡,避免隐藏前残留的高度值)
   const allChildren = Array.from(page.children);
-  allChildren.forEach((c) => { c.style.minHeight = ""; c.style.height = ""; });
   const cards = allChildren.filter((c) => c.style.display !== "none");
   if (!cards.length) return;
+  // 隐藏卡可能残留上次的高度,清掉(有值才写,避免无谓样式失效)
+  allChildren.forEach((c) => {
+    if (c.style.display !== "none") return;
+    if (c.style.minHeight) c.style.minHeight = "";
+    if (c.style.height) c.style.height = "";
+  });
   // 卡片间距(margin-bottom 14px × n-1)从可用高度扣除
   const gapTotal = Math.max(0, (cards.length - 1) * 14);
   const usable = Math.max(0, avail - gapTotal);
+  let levelChanged = false;
   cards.forEach((c) => {
-    const ratioH = Math.floor((usable * cardRatioOf(c)) / 4);
+    const key = cardKeyOf(c);
+    const ratio = cardRatioOf(c);
+    const ratioH = Math.floor((usable * ratio) / 4);
     // 用 height 而非 minHeight:卡片内部 flex:1 子元素(宠物舞台/音乐封面等)
     // 在只有 min-height 的 flex 容器里不拉伸(min-height 不参与 flex 分配),
     // height 确定后 flex 子元素正常填满(宠物舞台曾因高度 0 图片不可见)
-    c.style.height = ratioH + "px";
-    c.style.overflow = "hidden";
+    const h = ratioH + "px";
+    if (c.style.height !== h) c.style.height = h; // 值相同不写,避免触发重排
+    if (c.style.overflow !== "hidden") c.style.overflow = "hidden";
     // 记录当前档位:卡片内部 CSS/JS 按 data-height 调整内容(周/月视图、条数等)
-    c.dataset.height = String(cardRatioOf(c));
+    if (c.dataset.height !== String(ratio)) {
+      c.dataset.height = String(ratio);
+      levelChanged = true;
+    }
+    if (appliedHeights.get(key) !== ratio) {
+      appliedHeights.set(key, ratio); // 首次填充/用户改档位/卡片换页后首次进入
+      levelChanged = true;
+    }
   });
-  // 卡片高度/档位已变:通知订阅方(股票分页重算、各卡片按档位重渲染内容)
+  if (!levelChanged) return; // 只是像素高度变化:内容不用重渲染
+  // 档位已变:通知订阅方(股票列表适配、各卡片按档位重渲染内容)
   try { if (window.__onCardsRefit) window.__onCardsRefit(); } catch (e) { /* 忽略 */ }
   try {
     (window.__cardHeightCbs || []).forEach((fn) => { try { fn(); } catch (e) { /* 忽略 */ } });

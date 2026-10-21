@@ -44,19 +44,82 @@ async function collectBookmarks() {
   return items;
 }
 
+/** 书签缓存:懒加载 + 并发合并 + 事件防抖。
+ * 旧实现在 SW 顶层直接 refreshCache():Service Worker 每次被唤醒(哪怕只是悬浮预览的
+ * checkFrameable)都会重读整棵书签树并写一遍 session;批量导入收藏夹时还会连发几十次。 */
+let refreshInFlight = null;
+let refreshTimer = null;
+
 async function refreshCache() {
-  const items = await collectBookmarks();
-  await chrome.storage.session.set({ [BOOKMARK_CACHE_KEY]: items });
-  return items;
+  if (refreshInFlight) return refreshInFlight; // 并发请求合并为一次
+  refreshInFlight = (async () => {
+    const items = await collectBookmarks();
+    await chrome.storage.session.set({ [BOOKMARK_CACHE_KEY]: items });
+    return items;
+  })();
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
 }
 
-refreshCache();
+/** 书签事件防抖:一次批量操作合并成一次重建 */
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    refreshCache().catch(() => { /* 忽略 */ });
+  }, 400);
+}
 
 for (const eventName of ["onCreated", "onRemoved", "onChanged", "onMoved", "onChildrenReordered"]) {
-  chrome.bookmarks[eventName].addListener(() => refreshCache());
+  chrome.bookmarks[eventName].addListener(scheduleRefresh);
 }
 
 /* ================= 网页文本提取 ================= */
+
+const MAX_HTML_BYTES = 400 * 1024; // 只读前 400KB:正则剥离只需正文开头,避免整页(几十 MB)进内存
+
+/** 从 content-type 里取 charset(取不到回退 utf-8) */
+function charsetOf(contentType) {
+  const m = /charset=([^;]+)/i.exec(contentType || "");
+  return m ? m[1].trim().replace(/^["']|["']$/g, "") : "utf-8";
+}
+
+/** 流式读取但限制总字节数:超出即取消,避免大页面拖垮 SW */
+async function readTextCapped(resp, maxBytes) {
+  if (!resp.body || typeof resp.body.getReader !== "function") {
+    return (await resp.text()).slice(0, maxBytes);
+  }
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    try { reader.cancel(); } catch (e) { /* 忽略 */ }
+  }
+  const buf = new Uint8Array(Math.min(total, maxBytes));
+  let off = 0;
+  for (const c of chunks) {
+    const take = Math.min(c.byteLength, buf.length - off);
+    if (take <= 0) break;
+    buf.set(c.subarray(0, take), off);
+    off += take;
+  }
+  const charset = charsetOf(resp.headers.get("content-type"));
+  try {
+    return new TextDecoder(charset, { fatal: false }).decode(buf);
+  } catch (e) {
+    return new TextDecoder("utf-8").decode(buf); // 未知 charset:退回 utf-8
+  }
+}
 
 async function fetchPageText(url) {
   const ctrl = new AbortController();
@@ -68,7 +131,10 @@ async function fetchPageText(url) {
       redirect: "follow",
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const html = await resp.text();
+    const ct = resp.headers.get("content-type") || "";
+    // 只处理 HTML/文本类:PDF/图片/压缩包等直接标记失败,不当文本读
+    if (ct && !/text\/|html|xml|json/i.test(ct)) throw new Error("NOT_HTML");
+    const html = await readTextCapped(resp, MAX_HTML_BYTES);
     return extractText(html);
   } finally {
     clearTimeout(timer);
@@ -345,13 +411,36 @@ async function askDeepSeek(pageText, title, model, baseUrl) {
   }
 }
 
-/** 统一写缓存:标题/描述/失败标记/手动标记 */
-async function updateStore(url, { title, text, failed, manual }) {
+/** 两张 map 是否真的不同(只比较字符串/布尔值) */
+function mapChanged(next, prev) {
+  const a = Object.keys(next);
+  if (a.length !== Object.keys(prev).length) return true;
+  for (const k of a) if (next[k] !== prev[k]) return true;
+  return false;
+}
+
+/** 统一写缓存:标题/描述/失败标记/手动标记。
+ * 串行化写入(两个并发生成任务读改写交错会互相覆盖)+ 只写真正变化的 key
+ * (旧实现每个书签固定 4 读 4 写,书签多时是明显的写放大)。 */
+let storeWriteChain = Promise.resolve();
+function updateStore(url, patch) {
+  storeWriteChain = storeWriteChain
+    .then(() => applyStoreUpdate(url, patch))
+    .catch(() => { /* 单次写入失败不阻塞后续 */ });
+  return storeWriteChain;
+}
+
+async function applyStoreUpdate(url, { title, text, failed, manual }) {
   const cur = await chrome.storage.local.get([DESC_KEY, TITLE_KEY, DESC_FAIL_KEY, MANUAL_KEY]);
-  const descStore = { ...(cur[DESC_KEY] || {}) };
-  const titleStore = { ...(cur[TITLE_KEY] || {}) };
-  const failStore = { ...(cur[DESC_FAIL_KEY] || {}) };
-  const manualStore = { ...(cur[MANUAL_KEY] || {}) };
+  const curDesc = cur[DESC_KEY] || {};
+  const curTitle = cur[TITLE_KEY] || {};
+  const curFail = cur[DESC_FAIL_KEY] || {};
+  const curManual = cur[MANUAL_KEY] || {};
+
+  const descStore = { ...curDesc };
+  const titleStore = { ...curTitle };
+  const failStore = { ...curFail };
+  const manualStore = { ...curManual };
 
   if (failed) {
     failStore[url] = true;
@@ -363,12 +452,12 @@ async function updateStore(url, { title, text, failed, manual }) {
   if (manual) manualStore[url] = true;
   else delete manualStore[url];
 
-  await chrome.storage.local.set({
-    [DESC_KEY]: descStore,
-    [TITLE_KEY]: titleStore,
-    [DESC_FAIL_KEY]: failStore,
-    [MANUAL_KEY]: manualStore,
-  });
+  const next = {};
+  if (mapChanged(descStore, curDesc)) next[DESC_KEY] = descStore;
+  if (mapChanged(titleStore, curTitle)) next[TITLE_KEY] = titleStore;
+  if (mapChanged(failStore, curFail)) next[DESC_FAIL_KEY] = failStore;
+  if (mapChanged(manualStore, curManual)) next[MANUAL_KEY] = manualStore;
+  if (Object.keys(next).length) await chrome.storage.local.set(next);
 }
 
 /**
@@ -917,170 +1006,153 @@ async function dreamCarSpecs(seriesId) {
 
 /* ================= 消息路由 ================= */
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (!msg) return false;
+/* ================= 消息路由 =================
+ * 表驱动:每个 type 一个 `run(msg) -> 值 | Promise`,统一 sendResponse 与错误兜底。
+ * 新增接口只需加一行,不用再往 if 链里插分支。 */
 
-  if (msg.type === "getBookmarks") {
-    refreshCache()
-      .then(sendResponse)
-      .catch(() => sendResponse([]));
-    return true;
-  }
+/** 梦想之车系列的网络错误回退(带具体原因) */
+function netFail(extra) {
+  return (e) => Object.assign(
+    { status: "failed", message: "网络错误:" + (e && e.message ? e.message : "未知") },
+    extra
+  );
+}
 
-  if (msg.type === "describeBookmark") {
-    describeBookmark(msg.url, msg.title || msg.url, !!msg.force, msg.model, msg.baseUrl)
-      .then(sendResponse)
-      .catch(() => sendResponse({ status: "failed" }));
-    return true;
-  }
-
-  if (msg.type === "askGuaci") {
-    generateGuaci(msg.gua, msg.model, msg.baseUrl)
-      .then(sendResponse)
-      .catch(() => sendResponse({ status: "failed" }));
-    return true;
-  }
-
-  if (msg.type === "setGeoCoords") {
-    updateGeoWithCoords(msg.lat, msg.lon)
-      .then(sendResponse)
-      .catch(() => sendResponse(null));
-    return true;
-  }
-
-  if (msg.type === "getGeoInfo") {
-    getGeoInfo(!!msg.force)
-      .then(sendResponse)
-      .catch(() => sendResponse(null));
-    return true;
-  }
-
-  if (msg.type === "explainQuote") {
-    explainQuote(msg.text || "", msg.from || "")
-      .then((r) => sendResponse(r))
-      .catch(() => sendResponse({ status: "failed", explain: "" }));
-    return true;
-  }
-
-  if (msg.type === "getApiRegistry") {
-    sendResponse({ status: "ok", registry: apiRegistry.slice() });
-    return true;
-  }
-
-  if (msg.type === "checkApis") {
-    const auth = msg.apiKey ? { Authorization: "Bearer " + msg.apiKey } : null;
-    const urls = Array.isArray(msg.urls) ? msg.urls : [];
-    // 受限并发检测(最多 4 个同时),避免高频触发 Open-Meteo 等免费接口限流(403)
-    const results = {};
-    const CONC = 4;
-    let idx = 0;
-    const workers = [];
-    const worker = async () => {
-      while (idx < urls.length) {
-        const i = idx++;
-        const u = urls[i];
-        const h = /deepseek/i.test(u) && auth ? auth : undefined;
-        if (/\/chat\/completions/i.test(u)) {
-          // chat 检测无条件 POST(避免 GET 到 /chat/completions 误报 405)
-          results[u] = await checkChatApi(u, h);
-        } else if (/\/models/i.test(u) && /deepseek/i.test(u) && !auth) {
-          // 未配置 Key:直接跳过,避免无意义的 401/405
-          results[u] = { ok: false, status: 0, skipped: true };
-        } else {
-          results[u] = await checkApiUrl(u, h);
-        }
+/** 受限并发检测(最多 4 个同时),避免高频触发 Open-Meteo 等免费接口限流(403) */
+async function checkApisBatch(urls, auth) {
+  const results = {};
+  const CONC = 4;
+  let idx = 0;
+  const worker = async () => {
+    while (idx < urls.length) {
+      const i = idx++;
+      const u = urls[i];
+      const h = /deepseek/i.test(u) && auth ? auth : undefined;
+      if (/\/chat\/completions/i.test(u)) {
+        // chat 检测无条件 POST(避免 GET 到 /chat/completions 误报 405)
+        results[u] = await checkChatApi(u, h);
+      } else if (/\/models/i.test(u) && /deepseek/i.test(u) && !auth) {
+        // 未配置 Key:直接跳过,避免无意义的 401/405
+        results[u] = { ok: false, status: 0, skipped: true };
+      } else {
+        results[u] = await checkApiUrl(u, h);
       }
-    };
-    for (let k = 0; k < Math.min(CONC, urls.length); k++) workers.push(worker());
-    Promise.all(workers)
-      .then(() => sendResponse({ status: "ok", results }))
-      .catch(() => sendResponse({ status: "failed", results: {} }));
-    return true;
-  }
+    }
+  };
+  const workers = [];
+  for (let k = 0; k < Math.min(CONC, urls.length); k++) workers.push(worker());
+  await Promise.all(workers);
+  return results;
+}
 
-  if (msg.type === "checkFrameable") {
-    checkFrameable(msg.url)
-      .then((ok) => sendResponse({ status: ok ? "ok" : "blocked" }))
-      .catch(() => sendResponse({ status: "ok" }));
-    return true;
-  }
+const messageHandlers = {
+  getBookmarks: {
+    run: () => refreshCache(),
+    fallback: [],
+  },
+  describeBookmark: {
+    run: (m) => describeBookmark(m.url, m.title || m.url, !!m.force, m.model, m.baseUrl),
+    fallback: { status: "failed" },
+  },
+  askGuaci: {
+    run: (m) => generateGuaci(m.gua, m.model, m.baseUrl),
+    fallback: { status: "failed" },
+  },
+  setGeoCoords: {
+    run: (m) => updateGeoWithCoords(m.lat, m.lon),
+    fallback: null,
+  },
+  getGeoInfo: {
+    run: (m) => getGeoInfo(!!m.force),
+    fallback: null,
+  },
+  explainQuote: {
+    run: (m) => explainQuote(m.text || "", m.from || ""),
+    fallback: { status: "failed", explain: "" },
+  },
+  getApiRegistry: {
+    run: () => ({ status: "ok", registry: apiRegistry.slice() }),
+    fallback: { status: "ok", registry: [] },
+  },
+  checkApis: {
+    run: (m) => checkApisBatch(
+      Array.isArray(m.urls) ? m.urls : [],
+      m.apiKey ? { Authorization: "Bearer " + m.apiKey } : null
+    ).then((results) => ({ status: "ok", results })),
+    fallback: { status: "failed", results: {} },
+  },
+  checkFrameable: {
+    run: (m) => checkFrameable(m.url).then((ok) => ({ status: ok ? "ok" : "blocked" })),
+    fallback: { status: "ok" }, // 无法检测时按可预览处理,避免误伤
+  },
+  getDouyinHot: {
+    run: () => fetchDouyinHot().then((items) => ({ status: items.length ? "ok" : "failed", items })),
+    fallback: { status: "failed", items: [] },
+  },
+  getDeepSeekModels: {
+    run: (m) => getDeepSeekModels(m.key || "", m.baseUrl || "").then((r) => ({
+      status: r.models.length ? "ok" : "failed",
+      models: r.models,
+      error: r.error || "",
+    })),
+    fallback: { status: "failed", models: [], error: "未知错误" },
+  },
+  getEngineIconData: {
+    run: (m) => fetchIconData(m.url).then((dataUrl) => ({
+      status: dataUrl ? "ok" : "failed",
+      dataUrl: dataUrl || "",
+    })),
+    fallback: { status: "failed", dataUrl: "" },
+  },
+  getWallpapers: {
+    run: () => getWallpapers(),
+    fallback: { urls: [] },
+  },
+  dreamCarSearch: {
+    run: (m) => dreamCarSearch(m.kw || ""),
+    fallback: netFail({ list: [] }),
+  },
+  dreamCarSeries: {
+    run: (m) => dreamCarSeries(m.seriesId),
+    fallback: netFail({ specs: [] }),
+  },
+  dreamCarPano: {
+    run: (m) => dreamCarPano(m.specId),
+    fallback: netFail({ colors: [] }),
+  },
+  dreamCarBrands: {
+    run: () => dreamCarBrands(),
+    fallback: netFail({ letters: [] }),
+  },
+  dreamCarSeriesByBrand: {
+    run: (m) => dreamCarSeriesByBrand(m.brandId),
+    fallback: netFail({ groups: [] }),
+  },
+  dreamCarSpecs: {
+    run: (m) => dreamCarSpecs(m.seriesId),
+    fallback: netFail({ groups: [] }),
+  },
+  hasApiKey: {
+    run: () => getApiKey().then((k) => ({ hasKey: !!k })),
+    fallback: { hasKey: false },
+  },
+};
 
-  if (msg.type === "getDouyinHot") {
-    fetchDouyinHot()
-      .then((items) => sendResponse({ status: items.length ? "ok" : "failed", items }))
-      .catch(() => sendResponse({ status: "failed", items: [] }));
-    return true;
-  }
-
-  if (msg.type === "getDeepSeekModels") {
-    getDeepSeekModels(msg.key || "", msg.baseUrl || "")
-      .then((r) => sendResponse({ status: r.models.length ? "ok" : "failed", models: r.models, error: r.error || "" }))
-      .catch(() => sendResponse({ status: "failed", models: [], error: "未知错误" }));
-    return true;
-  }
-
-  if (msg.type === "getEngineIconData") {
-    fetchIconData(msg.url)
-      .then((dataUrl) => sendResponse({ status: dataUrl ? "ok" : "failed", dataUrl: dataUrl || "" }))
-      .catch(() => sendResponse({ status: "failed", dataUrl: "" }));
-    return true;
-  }
-
-  if (msg.type === "getWallpapers") {
-    getWallpapers()
-      .then(sendResponse)
-      .catch(() => sendResponse({ urls: [] }));
-    return true;
-  }
-
-  if (msg.type === "dreamCarSearch") {
-    dreamCarSearch(msg.kw || "")
-      .then(sendResponse)
-      .catch((e) => sendResponse({ status: "failed", list: [], message: "网络错误:" + (e && e.message ? e.message : "未知") }));
-    return true;
-  }
-
-  if (msg.type === "dreamCarSeries") {
-    dreamCarSeries(msg.seriesId)
-      .then(sendResponse)
-      .catch((e) => sendResponse({ status: "failed", specs: [], message: "网络错误:" + (e && e.message ? e.message : "未知") }));
-    return true;
-  }
-
-  if (msg.type === "dreamCarPano") {
-    dreamCarPano(msg.specId)
-      .then(sendResponse)
-      .catch((e) => sendResponse({ status: "failed", colors: [], message: "网络错误:" + (e && e.message ? e.message : "未知") }));
-    return true;
-  }
-
-  if (msg.type === "dreamCarBrands") {
-    dreamCarBrands()
-      .then(sendResponse)
-      .catch((e) => sendResponse({ status: "failed", letters: [], message: "网络错误:" + (e && e.message ? e.message : "未知") }));
-    return true;
-  }
-
-  if (msg.type === "dreamCarSeriesByBrand") {
-    dreamCarSeriesByBrand(msg.brandId)
-      .then(sendResponse)
-      .catch((e) => sendResponse({ status: "failed", groups: [], message: "网络错误:" + (e && e.message ? e.message : "未知") }));
-    return true;
-  }
-
-  if (msg.type === "dreamCarSpecs") {
-    dreamCarSpecs(msg.seriesId)
-      .then(sendResponse)
-      .catch((e) => sendResponse({ status: "failed", groups: [], message: "网络错误:" + (e && e.message ? e.message : "未知") }));
-    return true;
-  }
-
-  if (msg.type === "hasApiKey") {
-    getApiKey().then((k) => sendResponse({ hasKey: !!k }));
-    return true;
-  }
-
-  return false;
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || !msg.type) return false;
+  const handler = messageHandlers[msg.type];
+  if (!handler) return false;
+  Promise.resolve()
+    .then(() => handler.run(msg))
+    .then((res) => {
+      try { sendResponse(res); } catch (e) { /* 通道已关闭:忽略 */ }
+    })
+    .catch((e) => {
+      try {
+        sendResponse(typeof handler.fallback === "function" ? handler.fallback(e) : handler.fallback);
+      } catch (err) { /* 通道已关闭:忽略 */ }
+    });
+  return true;
 });
 /* ================= 背景壁纸(Bing 每日壁纸,风格接近 Infinity) ================= */
 const WALLPAPER_CACHE = "wallpapersCache"; // session: string[]
@@ -1194,8 +1266,23 @@ async function checkApiUrl(url, extraHeaders) {
   }
 }
 
+/* 可嵌入性缓存:悬浮预览每次悬停都会问一次,同一站点反复 HEAD 请求纯属浪费。
+ * 按 origin 缓存 10 分钟(SW 生命周期内有效;不同路径的嵌入策略按站点粒度足够)。 */
+const frameableCache = new Map(); // origin -> { ok, t }
+const FRAMEABLE_TTL_MS = 10 * 60 * 1000;
+
 /** 预检站点是否允许被 iframe 嵌入(检查 X-Frame-Options / CSP frame-ancestors) */
 async function checkFrameable(url) {
+  let origin = String(url || "");
+  try { origin = new URL(url).origin; } catch (e) { /* 非法 URL:用原串当 key */ }
+  const hit = frameableCache.get(origin);
+  if (hit && Date.now() - hit.t < FRAMEABLE_TTL_MS) return hit.ok;
+  const ok = await probeFrameable(url);
+  frameableCache.set(origin, { ok, t: Date.now() });
+  return ok;
+}
+
+async function probeFrameable(url) {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 4000);

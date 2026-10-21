@@ -31,6 +31,12 @@ const pet = {
   dragging: false,
   dragged: false,
   dragOffset: 0,
+  // 渲染节流:位置/朝向没变就不写 DOM;静止状态不排下一帧
+  lastLeft: null,
+  lastFlip: null,
+  lastNow: 0,
+  wakeTimer: 0,
+  cardEl: null,
 };
 
 function petSetFrame(action) {
@@ -83,6 +89,7 @@ function petInteract() {
   showZzz(false);
   petSwitchMode("swipe");
   pet.swipeUntil = performance.now() + 1300;
+  petWake();
 }
 
 /** 喂食:食物掉落 + 开心 */
@@ -107,6 +114,7 @@ function petFeed() {
   heart.style.left = (pet.x + 30) + "px";
   stage.appendChild(heart);
   setTimeout(() => heart.remove(), 1600);
+  petWake();
 }
 
 /** 切换宠物 */
@@ -121,30 +129,53 @@ function petCycle() {
   if (info) info.textContent = PETS[pet.idx].name + " · 点击互动 · 可拖拽";
   // 持久化选择,刷新后恢复
   try { chrome.storage.local.set({ [PET_IDX_KEY]: pet.idx }); } catch (e) { /* 忽略 */ }
+  petWake();
+}
+
+/** 宠物卡片是否真的在用户眼前(清爽模式 / 非当前组件页 / 眼睛隐藏 / 标签页后台 → 停帧) */
+function petVisible() {
+  if (!pet.stageEl) return false;
+  if (!pet.cardEl) pet.cardEl = pet.stageEl.closest(".pet-card") || pet.stageEl;
+  return window.isCardVisible ? window.isCardVisible(pet.cardEl) : true;
+}
+
+/** 唤醒动画循环(可见性恢复 / 状态切换 / 切回网格时调用) */
+function petWake() {
+  clearTimeout(pet.wakeTimer);
+  if (pet.raf) return;
+  if (!petVisible()) return; // 仍不可见:等下一次可见性变化再唤醒
+  pet.lastNow = 0; // 重置 dt,避免长时间休眠后一次跳很远
+  pet.raf = requestAnimationFrame(petTick);
 }
 
 function petTick(now) {
-  // 清爽模式守卫:卡片隐藏时停止动画循环(省 CPU),切回网格由 onGridResume 重启
-  if (document.body.classList.contains("mode-clean")) { pet.raf = null; return; }
-  // 每帧高频调用:优先用 initPet 缓存的 DOM 引用,避免重复查询
-  const stage = pet.stageEl || document.getElementById("pet-stage");
-  const img = pet.imgEl || document.getElementById("pet-img");
-  if (!stage || !img) { pet.raf = null; return; }
+  pet.raf = null;
+  // 不可见(清爽模式/其他组件页/后台):不再排帧,省掉整段 CPU
+  if (!petVisible()) return;
+  const stage = pet.stageEl;
+  const img = pet.imgEl;
+  if (!stage || !img) return;
 
   const w = stage.clientWidth || 200;
   const imgW = img.clientWidth || 80;
   pet.stageW = w;
+  // 帧间隔归一化:掉帧/后台恢复后速度仍然一致(原实现固定每帧 1.6px)
+  const dt = pet.lastNow ? Math.min(3, Math.max(0.2, (now - pet.lastNow) / 16.67)) : 1;
+  pet.lastNow = now;
 
   const speed = pet.mode === "run" ? 1.6 : pet.mode === "walk" ? 0.7 : 0;
 
   // 移动(拖拽中不自动移动)
   if (!pet.dragging) {
-    pet.x += speed * pet.dir;
+    pet.x += speed * pet.dir * dt;
     if (pet.dir > 0 && pet.x + imgW > w - 4) { pet.x = w - imgW - 4; pet.dir = -1; }
     if (pet.dir < 0 && pet.x < 4) { pet.x = 4; pet.dir = 1; }
   }
-  img.style.left = pet.x + "px";
-  img.style.transform = "scaleX(" + (pet.dir < 0 ? -1 : 1) + ")";
+  // 值没变就不写样式(原实现每帧无条件写 left + transform,持续触发样式失效)
+  const left = Math.round(pet.x);
+  if (left !== pet.lastLeft) { img.style.left = left + "px"; pet.lastLeft = left; }
+  const flip = pet.dir < 0 ? -1 : 1;
+  if (flip !== pet.lastFlip) { img.style.transform = "scaleX(" + flip + ")"; pet.lastFlip = flip; }
 
   // 状态机
   if (pet.mode === "swipe") {
@@ -156,7 +187,14 @@ function petTick(now) {
     petRandomMode();
   }
 
-  pet.raf = requestAnimationFrame(petTick);
+  // 只有"在动"才继续逐帧;发呆/睡觉/玩球用一次性定时器唤醒,静态页面零帧开销
+  if (speed > 0 || pet.mode === "swipe" || pet.dragging) {
+    pet.raf = requestAnimationFrame(petTick);
+    return;
+  }
+  const next = pet.mode === "sleep" ? pet.sleepUntil : pet.nextAt;
+  clearTimeout(pet.wakeTimer);
+  pet.wakeTimer = setTimeout(petWake, Math.max(16, next - now));
 }
 
 async function initPet() {
@@ -191,6 +229,7 @@ async function initPet() {
     const rect = stage.getBoundingClientRect();
     pet.dragOffset = ev.clientX - rect.left - pet.x;
     img.setPointerCapture && img.setPointerCapture(ev.pointerId);
+    petWake(); // 拖拽期间需要逐帧跟随
   });
   img.addEventListener("pointermove", (ev) => {
     if (!pet.dragging) return;
@@ -215,11 +254,16 @@ async function initPet() {
   if (fd) fd.addEventListener("click", petFeed);
 
   petRandomMode();
-  if (!pet.raf) pet.raf = requestAnimationFrame(petTick);
-  // 切回网格模式:重启被清爽模式暂停的动画循环
-  if (window.onGridResume) window.onGridResume(() => {
-    if (!pet.raf) pet.raf = requestAnimationFrame(petTick);
-  });
+  petWake();
+  // 切回网格模式 / 标签页回前台 / 当前组件页变化 / 眼睛按钮显示后重启动画循环
+  if (window.onGridResume) window.onGridResume(petWake);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) petWake(); });
+  if (typeof MutationObserver !== "undefined") {
+    const pageMo = new MutationObserver(petWake);
+    document.querySelectorAll(".col-page").forEach((p) =>
+      pageMo.observe(p, { attributes: true, attributeFilter: ["class"] }));
+    pageMo.observe(pet.cardEl || stage.closest(".pet-card") || stage, { attributes: true, attributeFilter: ["style"] });
+  }
 }
 
 if (document.readyState === "loading") {

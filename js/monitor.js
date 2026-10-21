@@ -4,7 +4,13 @@
  * 系统监控:CPU(两次采样差值)+ 内存(Chrome system API)
  * ======================================================== */
 
-const monitor = { prevCpu: null, prevTime: 0 };
+const monitor = { prevCpu: null, prevTime: 0, cardEl: null };
+
+/** 监控卡元素(缓存;卡片本身只有 class 没有 id) */
+function monitorCard() {
+  if (!monitor.cardEl) monitor.cardEl = document.querySelector(".monitor-card");
+  return monitor.cardEl;
+}
 
 function monitorRender(cpuPct, memInfo) {
   const cpuBar = document.getElementById("cpu-bar");
@@ -30,8 +36,9 @@ function monitorRender(cpuPct, memInfo) {
 }
 
 async function monitorTick() {
-  // 清爽模式守卫:会话内切到清爽模式后停止采样(卡片隐藏,无谓的 system API 轮询)
-  if (document.body.classList.contains("mode-clean")) return;
+  // 守卫:清爽模式 / 标签页后台 / 当前组件页不是监控卡时不采样
+  // (chrome.system.cpu.getInfo 是跨进程调用,2s 一次长期运行成本不低)
+  if (window.isCardVisible && !window.isCardVisible(monitorCard())) return;
   if (!chrome.system || !chrome.system.cpu) { monitorRender(0, null); return; }
   try {
     const info = await chrome.system.cpu.getInfo();
@@ -56,7 +63,7 @@ async function monitorTick() {
 
 function initMonitor() {
   monitorTick();
-  setInterval(monitorTick, 2000); // 2s 刷新
+  setInterval(monitorTick, 5000); // 5s 采样(2s 过于频繁,跨进程 IPC 成本高)
   // 切回网格模式:立即采样一次(清爽模式期间被守卫跳过)
   if (window.onGridResume) window.onGridResume(monitorTick);
 }

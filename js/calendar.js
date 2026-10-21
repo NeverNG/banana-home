@@ -43,14 +43,28 @@ function lunarInfo(y) { return LUNAR_INFO[y - MIN_YEAR]; }
 function leapMonth(y) { return lunarInfo(y) & 0xf; }
 function leapDays(y) { return leapMonth(y) ? (lunarInfo(y) & 0x10000 ? 30 : 29) : 0; }
 function monthDays(y, m) { return lunarInfo(y) & (0x10000 >> m) ? 30 : 29; }
+
+/* 年天数/日期换算缓存:整月渲染要算 42 格,每格都从 1900 年逐年累加太浪费。
+ * 缓存命中后单次渲染的农历换算成本降到查表级别。 */
+const yearDaysCache = new Map();
 function yearDays(y) {
+  const hit = yearDaysCache.get(y);
+  if (hit) return hit;
   let sum = 0;
   for (let m = 1; m <= 12; m++) sum += monthDays(y, m);
-  return sum + leapDays(y);
+  sum += leapDays(y);
+  yearDaysCache.set(y, sum);
+  return sum;
 }
 
-/** 公历(y 年 m 月 d 日)转农历 */
+const lunarCache = new Map();
+const LUNAR_CACHE_MAX = 800;
+
+/** 公历(y 年 m 月 d 日)转农历(结果按日期缓存) */
 function solarToLunar(y, m, d) {
+  const cacheKey = y + "-" + m + "-" + d;
+  const hit = lunarCache.get(cacheKey);
+  if (hit) return hit;
   const base = new Date(MIN_YEAR, 0, 31); // 1900-01-31 = 农历 1900 正月初一
   const target = new Date(y, m - 1, d);
   let offset = Math.round((target - base) / 86400000);
@@ -66,7 +80,10 @@ function solarToLunar(y, m, d) {
     else if (leap === lM) { isLeap = true; }
     else { lM++; }
   }
-  return { year: lY, month: lM, day: offset + 1, isLeap };
+  const out = { year: lY, month: lM, day: offset + 1, isLeap };
+  if (lunarCache.size >= LUNAR_CACHE_MAX) lunarCache.clear();
+  lunarCache.set(cacheKey, out);
+  return out;
 }
 
 function lunarDayText(d) {
