@@ -27,10 +27,17 @@ function engineSearchUrl(e, q) {
   return e.url.replace("%s", encodeURIComponent(q));
 }
 
+/** 名称 → 稳定色相(0-359):自定义引擎配色、快捷方式首字母色块共用 */
+function hueOf(text) {
+  const s = String(text || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+}
+
 /** 根据名称哈希生成专属配色(自定义引擎,动态获取,每个引擎不同且稳定) */
 function autoEngineColor(name) {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  const h = hueOf(name);
   return {
     gradient: "linear-gradient(135deg, hsl(" + h + ", 55%, 45%), hsl(" + h + ", 55%, 35%))",
     shadow: "hsla(" + h + ", 55%, 45%, 0.45)",
@@ -2458,42 +2465,118 @@ function turnPageTo(p) {
   }
 }
 
+/* ===== 快捷方式图标:自动获取(浏览器标签页 favicon 样式) =====
+ * 由后台统一解析并缓存:页面声明的 <link rel="icon">(优先 SVG / 大尺寸)→ 根目录 /favicon.ico。
+ * 不取 apple-touch-icon / JSON-LD logo / og:image —— 那些是应用图标或分享图,与标签页图标外观不同。
+ * 首次进入抓取,之后用 chrome.storage.local 缓存;12h 后条件请求校验,图标变了自动更新。
+ * 页面侧只做一层内存缓存;两者都取不到时用 emoji / 首字母色块兜底,不会留空白。 */
+const QUICK_ICON_CACHE = new Map(); // key -> { promise, t, kind }
+const QUICK_ICON_FALLBACK_TTL = 5 * 60 * 1000;
+
+/** 名称首字(按码点取,emoji 也不会被截断) */
+function firstLetterOf(text) {
+  const s = String(text || "").trim();
+  return (Array.from(s)[0] || "?").toUpperCase();
+}
+
+/** 首字母色块图标(永不空白) */
+function letterIconEntry(text) {
+  return { kind: "letter", value: firstLetterOf(text), hue: hueOf(text) };
+}
+
+/** 问后台要图标(带超时:后台没醒/网络慢也不会卡住渲染) */
+function requestSiteIcon(pageUrl) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(v || "");
+    };
+    const timer = setTimeout(() => finish(""), 20000);
+    try {
+      chrome.runtime.sendMessage({ type: "getSiteIcon", url: pageUrl }, (res) => {
+        if (chrome.runtime.lastError || !res || res.status !== "ok") return finish("");
+        finish(res.dataUrl || "");
+      });
+    } catch (e) {
+      finish("");
+    }
+  });
+}
+
+/** 解析单个快捷方式的图标,返回 entry({kind:"url"|"emoji"|"letter"}) */
+function resolveQuickIcon(q) {
+  const key = q.url + "\u0001" + (q.icon || "") + "\u0001" + (q.name || "");
+  const hit = QUICK_ICON_CACHE.get(key);
+  if (hit) {
+    // 真实图标永久缓存;兜底图标给 5 分钟重试窗口(后台可能稍后才解析出图标)
+    const stale = hit.kind && hit.kind !== "url" && Date.now() - hit.t > QUICK_ICON_FALLBACK_TTL;
+    if (!stale) return hit.promise;
+    QUICK_ICON_CACHE.delete(key);
+  }
+  const rec = { t: Date.now(), kind: null, promise: null };
+  rec.promise = (async () => {
+    let u = null;
+    try { u = new URL(q.url); } catch (e) { u = null; }
+    if (!u) return letterIconEntry(q.name || hostOf(q.url));
+    // 标签页 favicon 统一交给后台(首次抓取 + 本地缓存 + 过期校验都在那边)
+    const dataUrl = await requestSiteIcon(u.href);
+    if (dataUrl) return { kind: "url", value: dataUrl };
+    // 取不到站点图标:用户设置的 emoji 兜底(只接受短文本,避免把误填的 URL 当图标)
+    const iconRaw = q.icon ? String(q.icon).trim() : "";
+    if (iconRaw && Array.from(iconRaw).length <= 4) {
+      return { kind: "emoji", value: iconRaw };
+    }
+    // 最差也有首字母色块
+    return letterIconEntry(q.name || u.hostname);
+  })();
+  rec.promise.then((entry) => { rec.kind = entry.kind; }).catch(() => {});
+  rec.promise.catch(() => {
+    if (QUICK_ICON_CACHE.get(key) === rec) QUICK_ICON_CACHE.delete(key); // 失败不缓存,下次还能重试
+  });
+  QUICK_ICON_CACHE.set(key, rec);
+  return rec.promise;
+}
 function makeQuickIcon(q, onLoaded) {
   const icon = document.createElement("span");
   icon.className = "ql-icon";
-
-  // 显示网站 favicon(chrome._favicon),无图标则留空
   // 不用 lazy:分页重建后图标需立即加载,否则翻页后新页图标空白
   const img = document.createElement("img");
   img.alt = "";
-  let retried = false;
+  icon.appendChild(img);
 
-  const tryLoad = () => {
-    // 重试时追加时间戳,打破 _favicon 空结果缓存
-    img.src = buildFavicon(q.url) + (retried ? "&t=" + Date.now() : "");
+  const showLetter = (entry) => {
+    icon.classList.add("ql-icon-letter");
+    icon.textContent = entry.value; // 同时移除内部 img
+    icon.style.background =
+      "linear-gradient(135deg, hsl(" + entry.hue + ",55%,52%), hsl(" + entry.hue + ",55%,36%))";
   };
 
-  img.addEventListener("load", () => {
-    if (img.naturalWidth > 1 || img.naturalHeight > 1) {
-      if (onLoaded) onLoaded(img);
-    } else if (!retried) {
-      retried = true;
-      setTimeout(() => { if (document.body.contains(img)) tryLoad(); }, 700);
-    } else {
-      img.remove(); // 两次都是空白,留空
+  resolveQuickIcon(q).then((entry) => {
+    if (!icon.isConnected) return; // 已翻页/重建:丢弃结果
+    if (entry.kind === "emoji") {
+      icon.textContent = entry.value; // 移除 img,只显示 emoji
+      return;
     }
-  });
-  img.addEventListener("error", () => {
-    if (!retried) {
-      retried = true;
-      setTimeout(() => { if (document.body.contains(img)) tryLoad(); }, 700);
-    } else {
-      img.remove();
+    if (entry.kind === "letter") {
+      showLetter(entry);
+      return;
     }
+    img.onload = () => {
+      if (img.naturalWidth > 1 || img.naturalHeight > 1) {
+        if (onLoaded) onLoaded(img);
+      } else {
+        showLetter(letterIconEntry(q.name || hostOf(q.url))); // 空白图:退回首字母
+      }
+    };
+    img.onerror = () => showLetter(letterIconEntry(q.name || hostOf(q.url)));
+    img.src = entry.value;
+  }).catch(() => {
+    if (icon.isConnected) showLetter(letterIconEntry(q.name || hostOf(q.url)));
   });
 
-  tryLoad();
-  icon.appendChild(img);
   return icon;
 }
 

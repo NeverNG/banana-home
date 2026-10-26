@@ -549,6 +549,357 @@ try {
   fail("事件委托路由测试异常: " + e.message);
 }
 
-/* ---------- 汇总 ---------- */
-console.log("\n" + (failures === 0 ? "全部通过" : failures + " 项失败") + " (" + checks + " 项检查)");
-process.exit(failures === 0 ? 0 : 1);
+/* ---------- 8. 快捷方式图标自动获取(logo + 缓存 + 自动更新) ---------- */
+console.log("\n[8] 快捷方式图标:logo 解析 / 缓存 / 更新");
+
+/** 载入 background.js(chrome 全部 stub,可注入 fetch 与 local storage) */
+function runBackground(opts) {
+  const o = opts || {};
+  const localStore = o.storageLocal || {};
+  const sandbox = {
+    console,
+    chrome: {
+      bookmarks: {
+        onCreated: { addListener() {} },
+        onRemoved: { addListener() {} },
+        onChanged: { addListener() {} },
+        onMoved: { addListener() {} },
+        onChildrenReordered: { addListener() {} },
+      },
+      runtime: { onMessage: { addListener() {} } },
+      storage: {
+        local: {
+          get(keys) {
+            if (keys == null) return Promise.resolve(Object.assign({}, localStore));
+            const arr = typeof keys === "string" ? [keys] : keys;
+            const out = {};
+            arr.forEach((k) => { if (k in localStore) out[k] = localStore[k]; });
+            return Promise.resolve(out);
+          },
+          set(obj) {
+            Object.assign(localStore, obj);
+            return Promise.resolve();
+          },
+          remove(keys) {
+            (typeof keys === "string" ? [keys] : keys).forEach((k) => delete localStore[k]);
+            return Promise.resolve();
+          },
+        },
+        session: { get: () => Promise.resolve({}), set: () => Promise.resolve() },
+      },
+    },
+    fetch: o.fetchImpl || (() => Promise.reject(new Error("no network"))),
+    AbortController: class { abort() {} },
+    setTimeout,
+    clearTimeout,
+    URL,
+    URLSearchParams,
+    TextDecoder,
+    TextEncoder,
+    btoa: (s) => Buffer.from(s, "binary").toString("base64"),
+    Uint8Array,
+    Blob: class { constructor(parts) { this.parts = parts; } },
+    createImageBitmap: o.createImageBitmap,
+    OffscreenCanvas: o.OffscreenCanvas,
+  };
+  sandbox.window = sandbox;
+  sandbox.self = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(read("background.js"), sandbox, { filename: "background.js" });
+  return { sandbox, store: localStore };
+}
+
+/** 构造一个最小 Response(stub) */
+function makeResp(status, contentType, body, extra) {
+  const e = extra || {};
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get(key) {
+        const k = String(key).toLowerCase();
+        if (k === "content-type") return contentType || "";
+        if (k === "etag") return e.etag || "";
+        if (k === "last-modified") return e.lastModified || "";
+        if (k === "content-length") {
+          if (!body) return "0";
+          return String(body.byteLength || Buffer.byteLength(String(body)));
+        }
+        return "";
+      },
+    },
+    text: async () => String(body || ""),
+    arrayBuffer: async () => body || new ArrayBuffer(0),
+  };
+}
+
+try {
+  const { sandbox } = runBackground({});
+  const html =
+    '<html><head>' +
+    '<link rel="icon" href="/favicon-32.png" sizes="32x32">' +
+    '<link rel="apple-touch-icon" href="/touch.png">' +
+    '<link rel="icon" href="/big.png" sizes="192x192">' +
+    '<link rel="icon" type="image/svg+xml" href="/icon.svg">' +
+    '<link rel="mask-icon" href="/mask.svg">' +
+    '<link rel="fluid-icon" href="/fluid.png">' +
+    '<meta property="og:image" content="/og.jpg">' +
+    '<script type="application/ld+json">{"logo":"/jsonlogo.png"}</script>' +
+    "</head></html>";
+  const cands = sandbox.pickIconCandidates(html, "https://site.test/");
+  assert(cands[0] === "https://site.test/icon.svg", "SVG favicon 最优先(任意尺寸都清晰)");
+  assert(cands[1] === "https://site.test/big.png", "其次是大尺寸 favicon(192x192)");
+  assert(cands.indexOf("https://site.test/favicon-32.png") >= 0, "普通 32px favicon 也入选");
+  assert(cands.indexOf("https://site.test/touch.png") < 0, "apple-touch-icon(应用图标)不当标签页图标");
+  assert(cands.indexOf("https://site.test/mask.svg") < 0, "mask-icon(单色蒙版)不入选");
+  assert(cands.indexOf("https://site.test/fluid.png") < 0, "fluid-icon(应用图标)不入选");
+  assert(cands.indexOf("https://site.test/og.jpg") < 0, "og:image(分享图)不入选");
+  assert(cands.indexOf("https://site.test/jsonlogo.png") < 0, "JSON-LD logo 不入选");
+  assert(cands.length === 4, "候选最多 4 个,控制最坏耗时");
+  assert(cands[cands.length - 1] === "https://site.test/favicon.ico", "/favicon.ico 永远是最后的兜底");
+
+  const onlyOg = sandbox.pickIconCandidates('<meta property="og:image" content="/og.jpg">', "https://x.test/");
+  assert(
+    onlyOg.length === 1 && onlyOg[0] === "https://x.test/favicon.ico",
+    "没有声明 favicon 时只用 /favicon.ico"
+  );
+
+  const empty = sandbox.pickIconCandidates("", "https://y.test/");
+  assert(empty.length === 1 && empty[0] === "https://y.test/favicon.ico", "无页面信息时用 /favicon.ico");
+} catch (e) {
+  fail("background pickIconCandidates 测试异常: " + e.message);
+}
+
+/* 首次抓取 → 缓存 → 过期条件校验 → 图标变化自动更新 */
+(async () => {
+  try {
+    const state = {
+      html: '<html><head><link rel="icon" href="/favicon-64.png" sizes="64x64"></head></html>',
+      logoVersion: 1,
+    };
+    const requests = [];
+    const png = (n) => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, n]).buffer;
+    const fetchImpl = async (url, init) => {
+      requests.push({ url, headers: (init && init.headers) || {} });
+      if (url === "https://site.test/page" || url === "https://site.test/other") {
+        return makeResp(200, "text/html; charset=utf-8", state.html);
+      }
+      if (url === "https://site.test/favicon-64.png") {
+        const etag = '"v' + state.logoVersion + '"';
+        if (init && init.headers && init.headers["If-None-Match"] === etag) {
+          return makeResp(304, "", null, { etag });
+        }
+        return makeResp(200, "image/png", png(state.logoVersion), { etag });
+      }
+      return makeResp(404, "text/plain", "not found");
+    };
+
+    const env = runBackground({ fetchImpl });
+    const first = await env.sandbox.getSiteIcon("https://site.test/page");
+    const expected1 = "data:image/png;base64," + Buffer.from(new Uint8Array(png(1))).toString("base64");
+    assert(first === expected1, "首次进入:自动抓取标签页 favicon 并返回 data URL");
+    assert(
+      requests.some((r) => r.url === "https://site.test/favicon-64.png"),
+      "按页面声明的 <link rel=icon> 抓取"
+    );
+    assert(
+      requests.every((r) => r.url !== "https://site.test/favicon.ico"),
+      "声明的 favicon 命中后不再请求根目录 /favicon.ico"
+    );
+    assert(!!env.store["siteIcon:https://site.test"], "图标写入 chrome.storage.local 缓存");
+
+    const countAfterFirst = requests.length;
+    const again = await env.sandbox.getSiteIcon("https://site.test/other");
+    assert(again === first, "12h 内再次进入:同 origin 命中缓存");
+    assert(requests.length === countAfterFirst, "缓存命中不发任何网络请求");
+
+    // 过期 + 服务器 304:只刷新时间戳,不重新下载
+    env.store["siteIcon:https://site.test"].t -= 13 * 3600 * 1000;
+    const revalidated = await env.sandbox.getSiteIcon("https://site.test/page");
+    const conditional = requests[requests.length - 1];
+    assert(revalidated === first, "图标没变:继续使用缓存");
+    assert(conditional.url === "https://site.test/favicon-64.png", "过期后对原图标地址做条件请求");
+    assert(conditional.headers["If-None-Match"] === '"v1"', "条件请求带 If-None-Match");
+    assert(
+      Date.now() - env.store["siteIcon:https://site.test"].t < 5000,
+      "304 后刷新缓存时间戳,下一次 12h 内不再请求"
+    );
+
+    // 图标变化:服务器 200 + 新内容 → 自动更新
+    env.store["siteIcon:https://site.test"].t -= 13 * 3600 * 1000;
+    state.logoVersion = 2;
+    const updated = await env.sandbox.getSiteIcon("https://site.test/page");
+    const expected2 = "data:image/png;base64," + Buffer.from(new Uint8Array(png(2))).toString("base64");
+    assert(updated === expected2, "站点图标变化后返回新图标");
+    assert(env.store["siteIcon:https://site.test"].dataUrl === expected2, "缓存同步更新为新图标");
+
+    // 7 天后再进入:重新解析页面(图标可能换了路径,只靠旧地址的 ETag 发现不了)
+    env.store["siteIcon:https://site.test"].t -= 13 * 3600 * 1000;
+    env.store["siteIcon:https://site.test"].resolvedAt -= 8 * 24 * 3600 * 1000;
+    const beforeRescan = requests.length;
+    const rescanned = await env.sandbox.getSiteIcon("https://site.test/page");
+    assert(rescanned === expected2, "7 天重扫后仍返回可用图标");
+    assert(
+      requests.slice(beforeRescan).some((r) => r.url === "https://site.test/page"),
+      "7 天后重新抓页面解析(图标换路径也能跟上)"
+    );
+
+    // 页面抓不到时用根目录 /favicon.ico 兜底
+    const env2 = runBackground({
+      fetchImpl: async (url) => {
+        if (url === "https://bare.test/favicon.ico") {
+          return makeResp(200, "image/x-icon", new Uint8Array([1, 2, 3]).buffer);
+        }
+        return makeResp(500, "text/plain", "boom");
+      },
+    });
+    const bare = await env2.sandbox.getSiteIcon("https://bare.test/page");
+    assert(typeof bare === "string" && bare.indexOf("data:image/x-icon") === 0, "页面不可抓时回退 /favicon.ico");
+
+    // 旧版缓存(logo 样式、无版本号)自动失效并重取 favicon
+    const staleStore = {
+      "siteIcon:https://old.test": {
+        t: Date.now(),
+        dataUrl: "data:image/png;base64,T0xETE9HTw==", // 旧 logo
+        src: "https://old.test/logo.png",
+      },
+    };
+    const envOld = runBackground({
+      storageLocal: staleStore,
+      fetchImpl: async (url) => {
+        if (url === "https://old.test/page") {
+          return makeResp(200, "text/html", '<link rel="icon" href="/favicon-32.png" sizes="32x32">');
+        }
+        if (url === "https://old.test/favicon-32.png") {
+          return makeResp(200, "image/png", new Uint8Array([7, 7, 7]).buffer, { etag: '"o"' });
+        }
+        return makeResp(404, "text/plain", "");
+      },
+    });
+    const fresh = await envOld.sandbox.getSiteIcon("https://old.test/page");
+    assert(fresh !== "data:image/png;base64,T0xETE9HTw==", "旧版 logo 缓存自动失效,重新取 favicon");
+    assert(envOld.store["siteIcon:https://old.test"].v === 3, "新缓存写入版本号");
+
+    // 大尺寸 ICO(如 DeepSeek 的 205KB favicon.ico)→ 缩成 ≤64px PNG 再缓存/传输
+    const bigBytes = new Uint8Array(205 * 1024);
+    bigBytes.set([0, 0, 1, 0], 0);
+    const tinyPng = new Uint8Array([137, 80, 78, 71, 9]);
+    const envBig = runBackground({
+      createImageBitmap: async () => ({ width: 225, height: 225, close() {} }),
+      OffscreenCanvas: class {
+        constructor(w, h) { this.width = w; this.height = h; }
+        getContext() { return { drawImage() {} }; }
+        async convertToBlob() { return { arrayBuffer: async () => tinyPng.buffer }; }
+      },
+      fetchImpl: async (url) => {
+        if (url === "https://big.test/") {
+          return makeResp(200, "text/html", '<link rel="icon" href="/favicon.ico" type="image/x-icon">');
+        }
+        if (url === "https://big.test/favicon.ico") {
+          return makeResp(200, "image/vnd.microsoft.icon", bigBytes.buffer, { etag: '"big"' });
+        }
+        return makeResp(404, "text/plain", "");
+      },
+    });
+    const bigIcon = await envBig.sandbox.getSiteIcon("https://big.test/");
+    const expectedPng = "data:image/png;base64," + Buffer.from(tinyPng).toString("base64");
+    assert(bigIcon === expectedPng, "205KB 的 ICO 被缩成 64px PNG(不再因超限直接失败)");
+    assert(
+      envBig.store["siteIcon:https://big.test"].dataUrl === expectedPng,
+      "缓存的是缩略后的 PNG,而不是 205KB 原图"
+    );
+  } catch (e) {
+    fail("background getSiteIcon 缓存/更新测试异常: " + e.message);
+  }
+
+  /* 页面侧:只负责请求后台 + emoji/首字母兜底 */
+  function runMainIcons(opts) {
+    const o = opts || {};
+    const messages = [];
+    const documentStub = {
+      hidden: false,
+      readyState: "loading",
+      body: { classList: { contains: () => false, add() {}, remove() {}, toggle() {} } },
+      head: { appendChild() {} },
+      documentElement: { style: { setProperty() {} } },
+      addEventListener() {},
+      getElementById() { return null; },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      createElement(tag) { return makeDomEl(tag); },
+    };
+    const sandbox = {
+      console,
+      document: documentStub,
+      chrome: {
+        runtime: {
+          id: "test",
+          lastError: null,
+          getURL: (p) => "chrome-extension://test" + p,
+          sendMessage(msg, cb) {
+            messages.push(msg);
+            if (o.throwOnMessage) throw new Error("no service worker");
+            if (cb) cb(o.siteIcon || { status: "empty", dataUrl: "" });
+          },
+        },
+        storage: { local: { get: () => Promise.resolve({}), set: () => Promise.resolve() } },
+      },
+      navigator: {},
+      location: { href: "" },
+      setTimeout,
+      clearTimeout,
+      setInterval: () => 0,
+      clearInterval: () => {},
+      requestAnimationFrame: () => 0,
+      cancelAnimationFrame: () => {},
+      performance: { now: () => Date.now() },
+      addEventListener() {},
+      removeEventListener() {},
+      URL,
+      URLSearchParams,
+      TextDecoder,
+      AbortController: class { abort() {} },
+      fetch: () => Promise.reject(new Error("no network")),
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(read("js/main.js"), sandbox, { filename: "js/main.js" });
+    return { sandbox, messages };
+  }
+
+  try {
+    const iconData = "data:image/png;base64,AAA";
+    const r1 = runMainIcons({ siteIcon: { status: "ok", dataUrl: iconData } });
+    const got = await r1.sandbox.resolveQuickIcon({ url: "https://b.test/", icon: "", name: "B" });
+    assert(got.kind === "url" && got.value === iconData, "页面直接使用后台返回的 favicon");
+    assert(r1.messages.length === 1 && r1.messages[0].type === "getSiteIcon", "向后台请求 getSiteIcon");
+
+    const r2 = runMainIcons({ siteIcon: { status: "empty", dataUrl: "" } });
+    const emoji = await r2.sandbox.resolveQuickIcon({ url: "https://c.test/", icon: "📺", name: "C" });
+    assert(emoji.kind === "emoji" && emoji.value === "📺", "取不到 favicon 时回退用户设置的 emoji");
+
+    const r3 = runMainIcons({ siteIcon: { status: "empty", dataUrl: "" } });
+    const letter = await r3.sandbox.resolveQuickIcon({ url: "https://d.test/", icon: "", name: "Baidu" });
+    assert(letter.kind === "letter" && letter.value === "B", "既无 favicon 也无 emoji 时回退首字母");
+
+    const before = r3.messages.length;
+    const cached = await r3.sandbox.resolveQuickIcon({ url: "https://d.test/", icon: "", name: "Baidu" });
+    assert(cached === letter && r3.messages.length === before, "同一 URL 命中页面缓存,不重复请求");
+
+    const r4 = runMainIcons({ throwOnMessage: true });
+    const fallback = await r4.sandbox.resolveQuickIcon({ url: "https://e.test/", icon: "", name: "Example" });
+    assert(fallback.kind === "letter" && fallback.value === "E", "后台异常时回退首字母");
+
+    const r5 = runMainIcons({ siteIcon: { status: "ok", dataUrl: iconData } });
+    const httpIcon = await r5.sandbox.resolveQuickIcon({ url: "http://plain.test/", icon: "", name: "P" });
+    assert(httpIcon.kind === "url" && httpIcon.value === iconData, "http 站点也由后台代取图标");
+  } catch (e) {
+    fail("页面侧 resolveQuickIcon 测试异常: " + e.message);
+  }
+
+  /* ---------- 汇总 ---------- */
+  console.log("\n" + (failures === 0 ? "全部通过" : failures + " 项失败") + " (" + checks + " 项检查)");
+  process.exit(failures === 0 ? 0 : 1);
+})();

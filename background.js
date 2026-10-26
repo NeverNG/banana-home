@@ -1104,6 +1104,13 @@ const messageHandlers = {
     })),
     fallback: { status: "failed", dataUrl: "" },
   },
+  getSiteIcon: {
+    run: (m) => getSiteIcon(m.url).then((dataUrl) => ({
+      status: dataUrl ? "ok" : "empty",
+      dataUrl: dataUrl || "",
+    })),
+    fallback: { status: "failed", dataUrl: "" },
+  },
   getWallpapers: {
     run: () => getWallpapers(),
     fallback: { urls: [] },
@@ -1337,7 +1344,9 @@ async function fetchDouyinHot() {
   }
 }
 
-async function fetchIconData(url) {
+/** 取图标字节并转 data URL;maxBytes 用于站点图标缓存(默认上限 512KB) */
+async function fetchIconData(url, maxBytes) {
+  const cap = maxBytes || 512 * 1024;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 6000);
@@ -1349,7 +1358,7 @@ async function fetchIconData(url) {
     clearTimeout(timer);
     if (!resp.ok) return null;
     const buf = await resp.arrayBuffer();
-    if (!buf || buf.byteLength === 0 || buf.byteLength > 512 * 1024) return null;
+    if (!buf || buf.byteLength === 0 || buf.byteLength > cap) return null;
     const bytes = new Uint8Array(buf);
     let bin = "";
     const chunk = 0x8000;
@@ -1364,3 +1373,317 @@ async function fetchIconData(url) {
   }
 }
 
+/* ================= 站点图标(favicon)自动解析(快捷方式) =================
+ * 目标:取浏览器标签页左侧显示的那个 favicon——
+ *   页面声明的 <link rel="icon">(SVG / 64px+ 优先)→ 根目录 /favicon.ico。
+ *   不取 apple-touch-icon / fluid-icon / JSON-LD logo / og:image(应用图标/分享图,外观不同)。
+ * 首次访问自动抓取并缓存;12h 后再访问用条件请求(ETag / Last-Modified)校验:
+ * 站点图标换了会拿到新图并覆盖缓存,没换则只更新时间戳(304,不重复下载)。
+ * 缓存按 origin 存在 chrome.storage.local 的 `siteIcon:<origin>`,单条写入,不整体重写。 */
+const SITE_ICON_PREFIX = "siteIcon:";
+const SITE_ICON_VERSION = 3;                 // 缓存结构版本:旧版缓存直接失效重取
+const SITE_ICON_TTL = 12 * 3600 * 1000;      // 缓存有效期:12h 内直接用
+const SITE_ICON_NEG_TTL = 6 * 3600 * 1000;   // 没取到图标:6h 后重新尝试
+const SITE_ICON_RESCAN_TTL = 7 * 24 * 3600 * 1000; // 7 天后重新解析页面(图标可能换了路径)
+const SITE_ICON_BYTES = 1024 * 1024;         // 原始图标上限(DeepSeek 的 favicon.ico 有 205KB)
+const SITE_ICON_MAX_SIDE = 64;               // 缓存前缩到 ≤64px,data URL 通常 <10KB
+const SITE_ICON_HTML_MAX = 300 * 1024;       // 页面只读开头,图标都在 <head>
+const ICON_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+/* 同一时刻最多抓 3 个页面:新标签页首屏可能同时问十几个图标 */
+let siteIconActive = 0;
+const siteIconWaiters = [];
+async function withSiteIconSlot(fn) {
+  while (siteIconActive >= 3) await new Promise((r) => siteIconWaiters.push(r));
+  siteIconActive++;
+  try {
+    return await fn();
+  } finally {
+    siteIconActive--;
+    if (siteIconWaiters.length) siteIconWaiters.shift()();
+  }
+}
+
+/** 取图标字节 → data URL,同时保留校验信息(ETag / Last-Modified)供下次条件请求 */
+async function fetchIconAsset(url, opts) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const headers = { "User-Agent": ICON_UA };
+    if (opts && opts.etag) headers["If-None-Match"] = opts.etag;
+    if (opts && opts.lastMod) headers["If-Modified-Since"] = opts.lastMod;
+    const resp = await fetch(url, {
+      signal: ctrl.signal,
+      headers,
+      redirect: "follow",
+      cache: "no-store",
+    });
+    if (resp.status === 304) {
+      return {
+        notModified: true,
+        etag: (opts && opts.etag) || "",
+        lastMod: (opts && opts.lastMod) || "",
+      };
+    }
+    if (!resp.ok) {
+      // 404/410:图标地址已失效,调用方需要重新解析;其它状态按网络异常处理
+      return resp.status === 404 || resp.status === 410 ? { gone: true } : null;
+    }
+    const len = parseInt(resp.headers.get("content-length") || "0", 10);
+    if (len && len > SITE_ICON_BYTES) return null;
+    const buf = await resp.arrayBuffer();
+    if (!buf || !buf.byteLength || buf.byteLength > SITE_ICON_BYTES) return null;
+    const ct = resp.headers.get("content-type") || "";
+    const meta = {
+      etag: resp.headers.get("etag") || "",
+      lastMod: resp.headers.get("last-modified") || "",
+    };
+    // SVG 本身很小且可无限缩放:原样保留,不做栅格化
+    if (/svg/i.test(ct) || looksLikeSvg(buf)) {
+      return Object.assign(
+        { dataUrl: iconBytesToDataUrl(buf, /svg/i.test(ct) ? ct : "image/svg+xml", url) },
+        meta
+      );
+    }
+    // 位图统一转成 ≤64px 的 PNG 再缓存/传输(DeepSeek 的 favicon.ico 有 205KB,原样太大)
+    const normalized = await normalizeIcon(buf, ct, url);
+    if (normalized) return Object.assign({ dataUrl: normalized }, meta);
+    // 规范化失败:只有声明为图片时才接受原始字节;非图片(软 404 的 HTML)直接丢弃
+    if (!/^image\//i.test(ct)) return null;
+    return Object.assign({ dataUrl: iconBytesToDataUrl(buf, ct, url) }, meta);
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 图片字节 → ≤64px PNG data URL;解码/绘制失败返回 null */
+async function normalizeIcon(buf, contentType, url) {
+  if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas !== "function") return null;
+  let bmp = null;
+  try {
+    bmp = await createImageBitmap(new Blob([buf], { type: contentType || "application/octet-stream" }));
+    const maxSide = Math.max(bmp.width || 0, bmp.height || 0);
+    if (!maxSide) return null;
+    // 只缩小不放大:16px 的小图标保持原像素,64px+ 的缩到 64px
+    const scale = Math.min(1, SITE_ICON_MAX_SIDE / maxSide);
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const blob = await canvas.convertToBlob({ type: "image/png" });
+    const out = await blob.arrayBuffer();
+    if (!out || !out.byteLength) return null;
+    return iconBytesToDataUrl(out, "image/png", url);
+  } catch (e) {
+    return null;
+  } finally {
+    if (bmp && bmp.close) bmp.close();
+  }
+}
+
+/** 粗略判断 SVG(部分服务器把 .svg 标成 image/x-icon 或 application/octet-stream) */
+function looksLikeSvg(buf) {
+  try {
+    const head = new TextDecoder("utf-8", { fatal: false })
+      .decode(new Uint8Array(buf).subarray(0, 256))
+      .toLowerCase();
+    return head.indexOf("<svg") >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+function iconBytesToDataUrl(buf, contentType, url) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  let type = /^image\//i.test(contentType || "") ? contentType : "";
+  if (!type) type = /\.ico(\?|$)/i.test(url || "") ? "image/x-icon" : "image/png";
+  return "data:" + type + ";base64," + btoa(bin);
+}
+
+/** 站点图标入口:命中缓存直接返回;过期则条件校验或重新解析;结果写回 local */
+async function getSiteIcon(pageUrl) {
+  let u;
+  try { u = new URL(pageUrl); } catch (e) { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  const key = SITE_ICON_PREFIX + u.origin;
+
+  let cached = null;
+  try {
+    cached = (await chrome.storage.local.get(key))[key] || null;
+  } catch (e) { cached = null; }
+  const ttl = cached && cached.dataUrl ? SITE_ICON_TTL : SITE_ICON_NEG_TTL;
+  if (cached && cached.v === SITE_ICON_VERSION && typeof cached.t === "number" && Date.now() - cached.t < ttl) {
+    return cached.dataUrl || null; // 首次抓取后 12h 内:直接用缓存,不发任何请求
+  }
+
+  // 缓存过期:先对原图标地址做条件请求(304 = 没变,只更新时间)。
+  // 距上次「解析出图标地址」超过 7 天则跳过条件请求、重新解析页面——
+  // 站点把图标换到新路径时,旧地址可能仍然 200,只靠 ETag 发现不了。
+  const resolvedAt = (cached && (cached.resolvedAt || cached.t)) || 0;
+  if (
+    cached && cached.v === SITE_ICON_VERSION && cached.dataUrl && cached.src &&
+    Date.now() - resolvedAt < SITE_ICON_RESCAN_TTL
+  ) {
+    const asset = await fetchIconAsset(cached.src, { etag: cached.etag, lastMod: cached.lastMod });
+    if (asset && asset.notModified) {
+      cached.t = Date.now();
+      await saveSiteIcon(key, cached);
+      return cached.dataUrl;
+    }
+    if (asset && asset.dataUrl) {
+      const next = {
+        v: SITE_ICON_VERSION,
+        t: Date.now(),
+        dataUrl: asset.dataUrl,
+        src: cached.src,
+        etag: asset.etag,
+        lastMod: asset.lastMod,
+        resolvedAt: cached.resolvedAt || cached.t,
+      };
+      await saveSiteIcon(key, next);
+      return next.dataUrl; // 图标变了:立刻返回新图,页面无需刷新
+    }
+    if (!asset || !asset.gone) {
+      return cached.dataUrl; // 网络抖动/超时:继续用旧图标,下次再校验
+    }
+    // gone:原图标地址 404 → 继续往下重新解析
+  }
+
+  const found = await withSiteIconSlot(() => resolveSiteIcon(u.href));
+  if (found && found.dataUrl) {
+    const now = Date.now();
+    const entry = {
+      v: SITE_ICON_VERSION,
+      t: now,
+      dataUrl: found.dataUrl,
+      src: found.src || "",
+      etag: found.etag || "",
+      lastMod: found.lastMod || "",
+      resolvedAt: now, // 记录「解析出这个地址」的时间,供 7 天重扫判断
+    };
+    await saveSiteIcon(key, entry);
+    return entry.dataUrl; // 首次进入:自动获取并缓存
+  }
+
+  // 没解析到:旧图标还在就继续用(比退化成字母好),下次再试
+  if (cached && cached.v === SITE_ICON_VERSION && cached.dataUrl) {
+    cached.t = Date.now();
+    await saveSiteIcon(key, cached);
+    return cached.dataUrl;
+  }
+  await saveSiteIcon(key, { v: SITE_ICON_VERSION, t: Date.now(), dataUrl: null, src: "", etag: "", lastMod: "" });
+  return null;
+}
+
+async function saveSiteIcon(key, entry) {
+  try {
+    await chrome.storage.local.set({ [key]: entry });
+  } catch (e) { /* 配额/权限失败:忽略,下次再写 */ }
+}
+
+/** 抓页面 → 解析「标签页图标(favicon)」候选 → 依次取图;页面抓不到时用 /favicon.ico */
+async function resolveSiteIcon(pageUrl) {
+  let base;
+  try { base = new URL(pageUrl); } catch (e) { return null; }
+
+  let html = "";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const resp = await fetch(pageUrl, {
+      signal: ctrl.signal,
+      redirect: "follow",
+      headers: { "User-Agent": ICON_UA, "Accept": "text/html,application/xhtml+xml" },
+    });
+    if (resp.ok) {
+      const ct = resp.headers.get("content-type") || "";
+      if (!ct || /text\/|html|xml/i.test(ct)) html = await readTextCapped(resp, SITE_ICON_HTML_MAX);
+    }
+  } catch (e) {
+    /* 页面抓不到:用 /favicon.ico 兜底 */
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const candidates = html ? pickIconCandidates(html, pageUrl) : faviconIcoUrl(base);
+  for (const url of candidates) {
+    const asset = await fetchIconAsset(url);
+    if (asset && asset.dataUrl) {
+      return { dataUrl: asset.dataUrl, src: url, etag: asset.etag, lastMod: asset.lastMod };
+    }
+  }
+  return null;
+}
+
+/** 站点根目录的经典标签页图标 */
+function faviconIcoUrl(base) {
+  try { return [new URL("/favicon.ico", base).href]; } catch (e) { return []; }
+}
+
+/** 从 HTML 里挑出「浏览器标签页图标」候选:只认 <link rel="icon">,按清晰度排序。
+ *  不取 apple-touch-icon / JSON-LD logo / og:image —— 那些是应用图标或分享图,
+ *  和浏览器标签左侧显示的小图标不是同一个东西。 */
+function pickIconCandidates(html, pageUrl) {
+  const found = [];
+  const seen = new Set();
+  const add = (raw, score) => {
+    if (!raw) return;
+    let abs;
+    try {
+      abs = new URL(String(raw).trim().replace(/&amp;/g, "&"), pageUrl).href;
+    } catch (e) {
+      return;
+    }
+    if (!/^https?:/i.test(abs) || seen.has(abs)) return;
+    seen.add(abs);
+    found.push({ url: abs, score });
+  };
+
+  const linkRe = /<link\b[^>]*>/gi;
+  let m;
+  while ((m = linkRe.exec(html || ""))) {
+    const tag = m[0];
+    const relM = /rel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    if (!relM) continue;
+    const rel = relM[1] || relM[2] || relM[3] || "";
+    // 只要真正的 favicon:排除 apple-touch-icon(应用图标)、mask-icon(单色蒙版)、fluid-icon(应用图标)
+    if (!/\bicon\b/i.test(rel) || /apple-touch-icon|mask-icon|fluid-icon/i.test(rel)) continue;
+    const hrefM = /href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    if (!hrefM) continue;
+    const href = hrefM[1] || hrefM[2] || hrefM[3] || "";
+
+    let score = 10; // 页面声明的 favicon 永远优先于根目录 /favicon.ico
+    const typeM = /type\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
+    const type = (typeM ? typeM[1] || typeM[2] || "" : "").toLowerCase();
+    if (/svg/.test(type)) score += 3; // 矢量:任何尺寸都清晰
+    const sizeM = /sizes\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
+    const sizes = sizeM ? sizeM[1] || sizeM[2] || "" : "";
+    if (/any/i.test(sizes)) {
+      score += 3;
+    } else {
+      let maxSide = 0;
+      const re = /(\d{2,4})\s*x\s*(\d{2,4})/gi;
+      let n;
+      while ((n = re.exec(sizes))) maxSide = Math.max(maxSide, parseInt(n[1], 10), parseInt(n[2], 10));
+      if (maxSide >= 64) score += 2; // 52px 卡片里 64+ 更清晰
+      else if (maxSide >= 32) score += 1;
+    }
+    add(href, score);
+  }
+
+  // 兜底:根目录 /favicon.ico(最经典的标签页图标)
+  add(faviconIcoUrl(pageUrl)[0], 1);
+
+  found.sort((a, b) => b.score - a.score);
+  return found.slice(0, 4).map((x) => x.url); // 最多试 4 个,控制最坏耗时
+}

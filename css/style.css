@@ -1022,6 +1022,15 @@ dialog::backdrop {
   padding: 4px;
 }
 
+/* 首字母色块兜底(取不到站点图标时):背景渐变由 JS 按名称哈希设置 */
+.ql-icon-letter {
+  font-size: 22px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
 /* ===== 书签树导航(仿 chrome://bookmarks) ===== */
 .bm-nav-node {
   display: flex;
