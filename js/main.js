@@ -3391,6 +3391,16 @@ const ABOUT_REPO_URL = "https://github.com/NeverNG/banana-home";
 /** 更新日志:发新版本时在最前面插一条(version 与 manifest.json 保持一致,date 用 YYYY-MM-DD) */
 const CHANGELOG = [
   {
+    version: "0.0.3",
+    date: "2026-11-24",
+    items: [
+      "修复设置弹窗「数据」「鸣谢」页签被挤出滚动区的问题(组件面板里多了一个 </div>,导致数据页钉在弹窗底部、鸣谢页无法滚动)",
+      "数据页:配置备份 / 包含内容两张卡片,导出·导入改为两列等宽按钮,补充「文件含 API Key」提醒",
+      "鸣谢页:接口状态卡片新增汇总(共 N 个 · 可用 / 异常 / 未配置)与「重新检测」,接口列表限高滚动",
+      "捐助卡片收款码缩小到 128px 并移到底部,弹窗内滚动更顺畅",
+    ],
+  },
+  {
     version: "0.0.2",
     date: "2026-11-24",
     items: [
@@ -3422,7 +3432,7 @@ function getAppVersion() {
     const v = chrome.runtime.getManifest().version;
     if (v) return v;
   } catch (e) { /* 非扩展环境(直接开 html) */ }
-  return "0.0.2";
+  return "0.0.3";
 }
 
 /** 填充「关于」区(版本号 + GitHub 地址);打开设置时刷新一次,保证版本号跟随 manifest */

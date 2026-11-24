@@ -6,7 +6,7 @@
     "128": "img/icon128.png"
   },
   "name": "香蕉起始页",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "覆盖新标签页:实时同步 Chrome 收藏夹(卡片式 + AI 标题/简介 + 悬浮缩略图)、快捷方式、时钟、IP 定位与天气、多引擎搜索。",
   "action": {
     "default_title": "香蕉起始页",
