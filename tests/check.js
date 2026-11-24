@@ -549,6 +549,32 @@ try {
   fail("事件委托路由测试异常: " + e.message);
 }
 
+/* ---------- 7.5 设置·常规「关于」区(版本号 / GitHub / 更新日志) ---------- */
+console.log("\n[7.5] 设置·常规「关于」区");
+try {
+  const manifestObj = JSON.parse(read("manifest.json"));
+  const clMatch = /const CHANGELOG\s*=\s*\[\s*\{\s*version:\s*"([^"]+)"\s*,\s*date:\s*"([^"]+)"/.exec(mainSrc);
+  assert(!!clMatch, "main.js 的 CHANGELOG 首条含 version + date");
+  assert(
+    !!clMatch && clMatch[1] === manifestObj.version,
+    "CHANGELOG 最新版本与 manifest.json 一致(" + (clMatch ? clMatch[1] : "?") + " vs " + manifestObj.version + ")"
+  );
+  assert(/const ABOUT_REPO_URL\s*=\s*"https:\/\/github\.com\//.test(mainSrc), "GitHub 项目地址常量存在");
+  assert(/function getAppVersion\(\)/.test(mainSrc), "版本号从 manifest 读取(唯一来源)");
+  assert(!!manifestObj.action && !!manifestObj.action.default_icon, "manifest 有 action(角标依赖它)");
+  assert((manifestObj.permissions || []).indexOf("alarms") >= 0, "manifest 声明 alarms 权限(定时检查)");
+  assert(indexHtml.indexOf('id="about-version"') > 0, "常规页有版本号节点");
+  assert(indexHtml.indexOf('id="about-github"') > 0, "常规页有 GitHub 按钮");
+  assert(indexHtml.indexOf('id="btn-changelog"') > 0, "常规页有更新日志按钮");
+  assert(indexHtml.indexOf('id="changelog-dialog"') > 0, "更新日志弹窗存在");
+  assert(indexHtml.indexOf('id="btn-check-update"') > 0, "常规页有检查更新按钮");
+  assert(indexHtml.indexOf('id="about-update-status"') > 0, "常规页有检查更新结果行");
+  assert(/function openChangelog\(\)/.test(mainSrc), "openChangelog 已定义");
+  assert(/function checkForUpdatesManually\(\)/.test(mainSrc), "手动检查更新函数已定义");
+} catch (e) {
+  fail("关于区检查异常: " + e.message);
+}
+
 /* ---------- 8. 快捷方式图标自动获取(logo + 缓存 + 自动更新) ---------- */
 console.log("\n[8] 快捷方式图标:logo 解析 / 缓存 / 更新");
 
@@ -556,6 +582,7 @@ console.log("\n[8] 快捷方式图标:logo 解析 / 缓存 / 更新");
 function runBackground(opts) {
   const o = opts || {};
   const localStore = o.storageLocal || {};
+  const badge = { text: "", title: "" };
   const sandbox = {
     console,
     chrome: {
@@ -566,7 +593,25 @@ function runBackground(opts) {
         onMoved: { addListener() {} },
         onChildrenReordered: { addListener() {} },
       },
-      runtime: { onMessage: { addListener() {} } },
+      runtime: {
+        id: "test",
+        onMessage: { addListener() {} },
+        onInstalled: { addListener() {} },
+        onStartup: { addListener() {} },
+        getManifest: () => ({ version: "0.0.1" }),
+      },
+      action: {
+        onClicked: { addListener() {} },
+        setBadgeText: async (p) => { badge.text = p && p.text ? p.text : ""; },
+        setBadgeBackgroundColor: async () => {},
+        setTitle: async (p) => { badge.title = (p && p.title) || ""; },
+      },
+      alarms: {
+        get: async () => undefined,
+        create: () => {},
+        onAlarm: { addListener() {} },
+      },
+      tabs: { create() {} },
       storage: {
         local: {
           get(keys) {
@@ -607,7 +652,7 @@ function runBackground(opts) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(read("background.js"), sandbox, { filename: "background.js" });
-  return { sandbox, store: localStore };
+  return { sandbox, store: localStore, badge };
 }
 
 /** 构造一个最小 Response(stub) */
@@ -630,6 +675,7 @@ function makeResp(status, contentType, body, extra) {
       },
     },
     text: async () => String(body || ""),
+    json: async () => JSON.parse(typeof body === "string" ? body : String(body || "")),
     arrayBuffer: async () => body || new ArrayBuffer(0),
   };
 }
@@ -897,6 +943,65 @@ try {
     assert(httpIcon.kind === "url" && httpIcon.value === iconData, "http 站点也由后台代取图标");
   } catch (e) {
     fail("页面侧 resolveQuickIcon 测试异常: " + e.message);
+  }
+
+  /* ---------- 9. 更新提示(版本比较 / 角标 / 发布渠道) ---------- */
+  console.log("\n[9] 更新提示:版本比较 / 角标 / 发布渠道");
+  try {
+    const env = runBackground({});
+    assert(env.sandbox.isNewerVersion("0.0.2", "0.0.1") === true, "0.0.2 比 0.0.1 新");
+    assert(env.sandbox.isNewerVersion("0.0.1", "0.0.2") === false, "0.0.1 不是更新");
+    assert(env.sandbox.isNewerVersion("0.0.2", "0.0.2") === false, "版本相同不提示");
+    assert(env.sandbox.isNewerVersion("0.0.10", "0.0.9") === true, "按数字段比较(0.0.10 > 0.0.9)");
+    assert(
+      env.sandbox.safeUpdateUrl("https://evil.test/update") === "https://github.com/NeverNG/banana-home/releases",
+      "非本仓库的更新链接被拒绝"
+    );
+
+    // 远端 Release 有新版本 → 图标角标「新」
+    const up = runBackground({
+      fetchImpl: async (url) => {
+        if (String(url).indexOf("api.github.com") >= 0) {
+          return makeResp(200, "application/json", JSON.stringify({
+            tag_name: "v9.9.9",
+            html_url: "https://github.com/NeverNG/banana-home/releases/tag/v9.9.9",
+          }));
+        }
+        return makeResp(404, "text/plain", "not found");
+      },
+    });
+    const res = await up.sandbox.syncUpdateBadge(true);
+    assert(res.status === "ok" && res.newer === true, "远端 9.9.9 → 判定有新版本");
+    assert(up.badge.text === "新", "角标文字 = 新");
+    assert(up.badge.title.indexOf("9.9.9") >= 0, "图标 tooltip 带新版本号");
+
+    // 用户点过图标(同一版本已看过)→ 不再显示角标
+    up.store.updateSeen = "9.9.9";
+    const again = await up.sandbox.syncUpdateBadge(false);
+    assert(again.newer === true && up.badge.text === "", "已看过的版本不再打扰(角标清空)");
+
+    // API 被限流(403)时,退回 HEAD releases/latest 跟随跳转解析版本
+    const viaPage = runBackground({
+      fetchImpl: async (url) => {
+        if (String(url).indexOf("api.github.com") >= 0) return makeResp(403, "application/json", "{}");
+        return { ok: true, status: 200, url: "https://github.com/NeverNG/banana-home/releases/tag/v9.9.9" };
+      },
+    });
+    const pageRes = await viaPage.sandbox.syncUpdateBadge(true);
+    assert(pageRes.status === "ok" && pageRes.latest === "9.9.9", "API 限流时 HEAD releases/latest 兜底解析版本");
+    assert(viaPage.badge.text === "新", "兜底渠道同样能点亮相标");
+
+    // 仓库既没有 Release 也没有可解析的发布页 → 静默不提示
+    const none = runBackground({ fetchImpl: async () => makeResp(404, "text/plain", "not found") });
+    const empty = await none.sandbox.syncUpdateBadge(true);
+    assert(empty.status === "empty" && none.badge.text === "", "没有任何发布信息时不提示、不报错");
+
+    // 网络异常 → 返回 failed,页面可提示检查失败
+    const offline = runBackground({ fetchImpl: async () => Promise.reject(new Error("offline")) });
+    const failed = await offline.sandbox.syncUpdateBadge(true);
+    assert(failed.status === "failed", "网络异常返回 failed");
+  } catch (e) {
+    fail("更新提示测试异常: " + e.message);
   }
 
   /* ---------- 汇总 ---------- */

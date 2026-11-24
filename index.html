@@ -356,6 +356,20 @@
           <button type="button" id="bgcolor-reset" class="alpha-default">恢复渐变</button>
         </div>
       </label>
+      <!-- 关于区:版本号由 main.js 读 manifest.json 填充,发布新版本只改 manifest -->
+      <div class="about-row">
+        <div class="about-brand">
+          <span class="about-name">香蕉起始页</span>
+          <span class="about-sub">banana-home<span class="about-dot">·</span><span id="about-version"><!-- 版本号由 renderAbout 读取 manifest 填充 --></span></span>
+        </div>
+        <div class="about-links">
+          <a class="alpha-default" id="about-github" href="https://github.com/NeverNG/banana-home" target="_blank" rel="noopener" title="在 GitHub 上查看项目源码">GitHub</a>
+          <button type="button" class="alpha-default" id="btn-changelog" title="查看版本更新记录">更新日志</button>
+          <button type="button" class="alpha-default" id="btn-check-update" title="立即检查 GitHub 上是否有新版本">检查更新</button>
+        </div>
+      </div>
+      <!-- 手动检查更新的结果(有新版本时带「查看更新」链接) -->
+      <p class="about-status" id="about-update-status" hidden></p>
       </div>
       <div class="tab-panel" data-panel="appearance" hidden>
 <div class="alpha-section">
@@ -508,6 +522,18 @@
         <button type="submit" class="btn-primary">保存</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- 更新日志弹窗(设置 · 常规 → 更新日志) -->
+  <dialog id="changelog-dialog">
+    <div class="dialog-form">
+      <h3>更新日志</h3>
+      <p class="dialog-tip">香蕉起始页 banana-home · 当前版本 <span id="changelog-cur-version"><!-- 由 main.js 填充 --></span></p>
+      <div class="changelog-list" id="changelog-list"><!-- 由 main.js 按 CHANGELOG 渲染 --></div>
+      <div class="dialog-actions">
+        <button type="button" id="changelog-close" class="btn-ghost">关闭</button>
+      </div>
+    </div>
   </dialog>
 
   <!-- 维护卡片弹窗(⋯ 或点击失败提示打开) -->

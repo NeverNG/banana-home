@@ -2327,6 +2327,148 @@ body.no-anim .main-row {
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+/* ===== 设置 · 常规页:关于区(软件版本号 / GitHub / 更新日志) ===== */
+.about-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.about-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.about-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.about-sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about-sub .about-dot {
+  margin: 0 4px;
+  opacity: 0.6;
+}
+
+.about-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* GitHub 用 <a>、更新日志用 <button>,共用 .alpha-default 玻璃样式 */
+.about-links .alpha-default {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.about-links .alpha-default:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 手动检查更新的结果(设置 · 常规) */
+.about-status {
+  margin: -2px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.62);
+  word-break: break-all;
+}
+
+.about-status a {
+  margin-left: 4px;
+  color: var(--accent);
+}
+
+.about-status[hidden] {
+  display: none;
+}
+
+/* 更新日志弹窗:条目列表(细磨砂滚动条,与 .bm-groups 一致) */
+.changelog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+.changelog-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.changelog-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.changelog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.changelog-ver {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.changelog-date {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.changelog-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--glass-border);
+  font-size: 10.5px;
+  color: var(--text);
+}
+
+.changelog-entry ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.changelog-entry li {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.changelog-entry li::marker {
+  color: rgba(255, 255, 255, 0.4);
+}
+
 /* 自定义背景调色盘 */
 .bgcolor-row {
   position: relative;

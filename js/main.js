@@ -3351,6 +3351,120 @@ function readCleanAlpha() {
   return el ? parseInt(el.value, 10) : DEFAULT_CLEAN_BG.alpha;
 }
 
+/* ===== 关于:软件版本号 / GitHub 项目地址 / 更新日志 ===== */
+
+/** 项目 GitHub 主页(设置 · 常规的「GitHub」按钮) */
+const ABOUT_REPO_URL = "https://github.com/NeverNG/banana-home";
+
+/** 更新日志:发新版本时在最前面插一条(version 与 manifest.json 保持一致,date 用 YYYY-MM-DD) */
+const CHANGELOG = [
+  {
+    version: "0.0.1",
+    date: "2026-11-24",
+    items: [
+      "首个公开版本:Chrome MV3 新标签页,收藏夹卡片式展示 + AI 标题/简介 + 悬浮网页预览",
+      "网格 / 清爽双模式:清爽模式刷新时零组件脚本、零书签数据、零网络请求",
+      "快捷方式图标自动抓取网站标签页 favicon(SVG 优先),本地缓存 12h + 过期条件校验自动更新",
+      "14 张左栏组件卡:时钟 / 日历(农历·节气·节假日)/ 天气 / 地图 / 名言 / 宠物 / 白噪音 / 股票 / 系统监控 / 热榜 / 扑克牌 / 梦想之车 / 八卦罗盘 / 访问活跃度",
+      "多引擎搜索 + 搜索历史与联想(GBK/UTF-8 自动识别)+ 自定义引擎拖拽排序",
+      "五区域透明度与磨砂度、清爽背景蒙版、渐变 / 纯色 / Bing 壁纸可切换",
+      "设置「常规」新增关于区:版本号、GitHub 项目链接、更新日志弹窗、手动「检查更新」",
+      "更新提示:GitHub 有新 Release 时扩展图标显示「新」角标,点图标打开发布页下载新版(接口限流时自动兜底)",
+      "性能:空闲零帧、书签卡增量渲染、事件委托、后台 Service Worker 轻量化",
+      "配置导出 / 导入(JSON),接口鸣谢与捐助支持",
+    ],
+  },
+];
+
+/** 读取扩展版本号:唯一来源是 manifest.json(发版只改一处,界面自动跟随) */
+function getAppVersion() {
+  try {
+    const v = chrome.runtime.getManifest().version;
+    if (v) return v;
+  } catch (e) { /* 非扩展环境(直接开 html) */ }
+  return "0.0.1";
+}
+
+/** 填充「关于」区(版本号 + GitHub 地址);打开设置时刷新一次,保证版本号跟随 manifest */
+function renderAbout() {
+  const version = getAppVersion();
+  const verEl = document.getElementById("about-version");
+  if (verEl) verEl.textContent = version;
+  const ghEl = document.getElementById("about-github");
+  if (ghEl) ghEl.href = ABOUT_REPO_URL;
+  const curEl = document.getElementById("changelog-cur-version");
+  if (curEl) curEl.textContent = version;
+}
+
+/** 渲染并打开更新日志弹窗(条目是静态数据,只在首次打开时构建) */
+function openChangelog() {
+  const dialog = document.getElementById("changelog-dialog");
+  const list = document.getElementById("changelog-list");
+  if (!dialog || !list) return;
+  renderAbout();
+  if (!list.dataset.rendered) {
+    const current = getAppVersion();
+    list.innerHTML = CHANGELOG.map((entry) => {
+      const badge = entry.version === current ? '<span class="changelog-badge">当前版本</span>' : "";
+      const items = entry.items.map((text) => "<li>" + text + "</li>").join("");
+      return (
+        '<section class="changelog-entry">' +
+        '<div class="changelog-head">' +
+        '<span class="changelog-ver">v' + entry.version + "</span>" +
+        '<span class="changelog-date">' + entry.date + "</span>" +
+        badge +
+        "</div><ul>" + items + "</ul></section>"
+      );
+    }).join("");
+    list.dataset.rendered = "1";
+  }
+  dialog.showModal();
+}
+
+/** 手动检查更新的状态文案(传空字符串隐藏) */
+function setUpdateStatus(text, url) {
+  const el = document.getElementById("about-update-status");
+  if (!el) return;
+  el.textContent = "";
+  if (!text) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  // 有新版本时附「查看更新」外链(后台已校验过只允许本项目仓库地址)
+  if (url) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "查看更新";
+    el.appendChild(link);
+  }
+}
+
+/** 设置 · 常规「检查更新」:手动问后台(force 走网络),按结果显示状态 */
+async function checkForUpdatesManually() {
+  const btn = document.getElementById("btn-check-update");
+  if (btn) btn.disabled = true;
+  setUpdateStatus("正在检查…");
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "checkUpdate", force: true });
+    if (!res || res.status === "failed") throw new Error((res && res.error) || "后台无响应");
+    if (res.status === "empty") {
+      setUpdateStatus("仓库暂未发布任何版本(创建 GitHub Release 后即可提示)");
+    } else if (res.newer) {
+      setUpdateStatus("发现新版本 v" + res.latest, res.url);
+    } else {
+      setUpdateStatus("已是最新版本 v" + res.current);
+    }
+  } catch (e) {
+    setUpdateStatus("检查失败:" + ((e && e.message) || "网络异常"));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function openSettings() {
   const dialog = document.getElementById("settings-dialog");
   // 一次读取全部设置键,避免多次串行 get
@@ -3414,6 +3528,7 @@ async function openSettings() {
   window._alphaPrev = { ...prefs };
   window._blurPrev = { ...blurPrefs };
   window._cleanBgPrev = { ...cleanBgPrefs };
+  renderAbout(); // 「关于」区版本号/GitHub 地址(版本号取自 manifest.json)
   dialog.showModal();
   setTimeout(() => document.getElementById("set-key").focus(), 50);
 }
@@ -3884,6 +3999,7 @@ async function init() {
   // 首屏一次性预读:后续 getLocal 命中快照,少 10+ 次 storage IPC
   try { bootStore = await chrome.storage.local.get(BOOT_KEYS); } catch (e) { bootStore = null; }
   renderCardHeightRows(); // 设置面板卡片行(须早于下方 cardHeightOpts 绑定)
+  renderAbout(); // 「关于」区版本号/GitHub 地址(版本号取自 manifest.json,打开设置时还会再刷一次)
   alignSettingsFab();
   window.addEventListener("resize", () => {
     alignSettingsFab();
@@ -3963,6 +4079,19 @@ async function init() {
 
   // 设置面板
   document.getElementById("btn-settings").addEventListener("click", openSettings);
+  // 常规页「关于」区:更新日志弹窗(叠在设置弹窗上层;GitHub 是普通外链 <a>)
+  const btnChangelog = document.getElementById("btn-changelog");
+  if (btnChangelog) btnChangelog.addEventListener("click", openChangelog);
+  // 检查更新:问后台,结果显示在「关于」区下方
+  const btnCheckUpdate = document.getElementById("btn-check-update");
+  if (btnCheckUpdate) btnCheckUpdate.addEventListener("click", checkForUpdatesManually);
+  const changelogClose = document.getElementById("changelog-close");
+  if (changelogClose) {
+    changelogClose.addEventListener("click", () => {
+      const dlg = document.getElementById("changelog-dialog");
+      if (dlg) dlg.close();
+    });
+  }
   document.getElementById("settings-dialog").addEventListener("submit", (e) => {
     e.preventDefault();
     saveSettings();

@@ -1,6 +1,6 @@
 {
   "name": "banana-home",
-  "version": "1.4.0",
+  "version": "0.0.1",
   "private": true,
   "description": "香蕉起始页 · Chrome 新标签页扩展(开发期校验脚本,不参与扩展运行)",
   "scripts": {

@@ -1045,6 +1045,174 @@ async function checkApisBatch(urls, auth) {
   return results;
 }
 
+/* ================= 更新提示(GitHub 有新版本时在扩展图标上标「新」) =================
+ * 本扩展不上架商店,用户拿的是 Release 里的 zip,没有商店自动更新,需要一个「该更新了」的提示。
+ * 检查渠道(与 jiuyang5354/bilibili-margin 的做法一致):
+ *   ① GitHub Releases API 的 releases/latest → 拿 tag + 发布页(发布页里就是安装包)
+ *   ② 接口不可用/被限流时:HEAD releases/latest,从跳转后的 /releases/tag/vX.Y.Z 地址里取版本
+ * 对比本地 manifest 版本:远端更新且用户还没点过图标 → chrome.action 角标显示「新」;
+ * 点图标打开发布页并消掉角标(记住已看过的版本,下一次定时检查不会重复弹)。
+ * 定时 12h 检查一次(结果缓存 6h),只在后台跑,与网格/清爽模式无关。 */
+
+const UPDATE_REPO = "NeverNG/banana-home";
+const UPDATE_RELEASE_API = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+const UPDATE_LATEST_PAGE = `https://github.com/${UPDATE_REPO}/releases/latest`;
+const UPDATE_PAGE_URL = `https://github.com/${UPDATE_REPO}/releases`;
+const UPDATE_CACHE_KEY = "updateCheck";  // local: { at, latest, url }
+const UPDATE_SEEN_KEY = "updateSeen";    // local: 用户已点开看过的版本号
+const UPDATE_ALARM = "updateCheck";
+const UPDATE_CACHE_TTL = 6 * 60 * 60 * 1000; // 6h 内不重复请求 GitHub
+const UPDATE_INTERVAL_MIN = 12 * 60;         // 12h 检查一次
+const UPDATE_BADGE_TEXT = "新";
+const UPDATE_BADGE_COLOR = "#6c8cff";        // 与页面 --accent 一致的玻璃蓝
+const VERSION_RE = /^\d{1,5}(?:\.\d{1,5}){1,3}$/;
+
+/** 带超时的 fetch(GitHub 偶尔很慢,别把 Service Worker 拖住) */
+async function updateFetch(url, opts = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    return await fetch(url, Object.assign({ cache: "no-store" }, opts, { signal: ctrl.signal }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 版本号 → 数字数组(按段比较,避免 "0.0.10" < "0.0.9" 这类字符串错判) */
+function versionParts(v) {
+  return String(v || "").split(".").slice(0, 4).map((n) => parseInt(n, 10) || 0);
+}
+
+/** remote 是否比 local 新 */
+function isNewerVersion(remote, local) {
+  const a = versionParts(remote);
+  const b = versionParts(local);
+  for (let i = 0; i < 4; i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+/** 更新链接只允许指向本项目仓库,别让远端数据把用户带到任意地址 */
+function safeUpdateUrl(url) {
+  if (typeof url !== "string") return UPDATE_PAGE_URL;
+  return url.indexOf(`https://github.com/${UPDATE_REPO}/`) === 0 ? url : UPDATE_PAGE_URL;
+}
+
+/**
+ * 拉取远端最新版本。
+ * ① Releases API(最准,能拿到发布页链接)
+ * ② HEAD releases/latest 跟着跳转到 /releases/tag/vX.Y.Z(接口限流时仍能用,不消耗配额)
+ * @returns {Promise<{latest:string,url:string}|null>} null = 仓库还没有任何发布信息
+ */
+async function fetchLatestVersion() {
+  let lastError = null;
+  try {
+    const rel = await updateFetch(UPDATE_RELEASE_API, { headers: { Accept: "application/vnd.github+json" } });
+    if (rel.ok) {
+      const data = await rel.json();
+      const tag = String((data && data.tag_name) || "").replace(/^v/i, "");
+      if (VERSION_RE.test(tag) && !data.draft && !data.prerelease) {
+        return { latest: tag, url: safeUpdateUrl(data.html_url) };
+      }
+    }
+  } catch (e) {
+    lastError = e; // 网络/接口异常:继续走下面不耗配额的兜底
+  }
+  try {
+    const page = await updateFetch(UPDATE_LATEST_PAGE, { method: "HEAD", redirect: "follow" });
+    const m = /\/releases\/tag\/v?(\d{1,5}(?:\.\d{1,5}){1,3})\/?$/.exec(page.url || "");
+    if (m) return { latest: m[1], url: safeUpdateUrl(page.url) };
+  } catch (e) {
+    lastError = e;
+  }
+  if (lastError) throw lastError; // 两个渠道都连不上:让页面提示「检查失败」
+  return null;
+}
+
+/** 检查更新(默认 6h 缓存;force = 跳过缓存,手动检查用) */
+async function checkForUpdate(force = false) {
+  const now = Date.now();
+  if (!force) {
+    const cached = (await chrome.storage.local.get(UPDATE_CACHE_KEY))[UPDATE_CACHE_KEY];
+    if (cached && typeof cached.at === "number" && now - cached.at < UPDATE_CACHE_TTL) return cached;
+  }
+  const info = await fetchLatestVersion();
+  const entry = info ? { at: now, latest: info.latest, url: info.url } : { at: now, latest: "", url: "" };
+  await chrome.storage.local.set({ [UPDATE_CACHE_KEY]: entry });
+  return entry;
+}
+
+/** 写/清扩展图标角标(失败不影响其它功能) */
+async function setUpdateBadge(show, latest) {
+  try {
+    await chrome.action.setBadgeText({ text: show ? UPDATE_BADGE_TEXT : "" });
+    if (show) {
+      await chrome.action.setBadgeBackgroundColor({ color: UPDATE_BADGE_COLOR });
+      await chrome.action.setTitle({ title: `发现新版本 v${latest} · 点击查看` });
+    } else {
+      await chrome.action.setTitle({ title: "香蕉起始页" });
+    }
+  } catch (e) { /* 角标只是提示 */ }
+}
+
+/** 按当前状态同步角标;返回本次检查结果(设置页手动检查也走这里) */
+async function syncUpdateBadge(force = false) {
+  let info = null;
+  try {
+    info = await checkForUpdate(force);
+  } catch (e) {
+    return { status: "failed", error: (e && e.message) || "检查失败", current: chrome.runtime.getManifest().version };
+  }
+  const local = chrome.runtime.getManifest().version;
+  if (!info || !info.latest) {
+    await setUpdateBadge(false);
+    return { status: "empty", current: local, latest: "", url: "", newer: false };
+  }
+  const seen = (await chrome.storage.local.get(UPDATE_SEEN_KEY))[UPDATE_SEEN_KEY];
+  const newer = isNewerVersion(info.latest, local);
+  await setUpdateBadge(newer && info.latest !== seen, info.latest);
+  return { status: "ok", current: local, latest: info.latest, url: info.url, newer, seen };
+}
+
+/** 定时任务:只在不存在时创建,避免每次 SW 唤醒都把周期重置 */
+async function ensureUpdateAlarm() {
+  try {
+    const existing = await chrome.alarms.get(UPDATE_ALARM);
+    if (!existing) chrome.alarms.create(UPDATE_ALARM, { delayInMinutes: 1, periodInMinutes: UPDATE_INTERVAL_MIN });
+  } catch (e) { /* 没有 alarms 支持时忽略 */ }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  // 安装/更新完成:本地已经是最新,清掉「已看过」和旧角标,再按最新状态检查一次
+  chrome.storage.local.remove(UPDATE_SEEN_KEY).catch(() => {});
+  ensureUpdateAlarm();
+  syncUpdateBadge(true).catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureUpdateAlarm();
+  syncUpdateBadge().catch(() => {}); // 走 6h 缓存,不额外压 GitHub
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === UPDATE_ALARM) syncUpdateBadge(true).catch(() => {});
+});
+
+/** 点扩展图标:有更新 → 打开发布页(里面就是新版本 zip)并记下已看过;无更新 → 打开主页 */
+async function openUpdatePage() {
+  let info = null;
+  try { info = await checkForUpdate(); } catch (e) { /* 网络不通:当作没有更新 */ }
+  const newer = !!(info && info.latest && isNewerVersion(info.latest, chrome.runtime.getManifest().version));
+  if (newer) await chrome.storage.local.set({ [UPDATE_SEEN_KEY]: info.latest });
+  await setUpdateBadge(false);
+  chrome.tabs.create({ url: newer ? safeUpdateUrl(info.url) : chrome.runtime.getURL("index.html") });
+}
+
+chrome.action.onClicked.addListener(() => { openUpdatePage(); });
+
 const messageHandlers = {
   getBookmarks: {
     run: () => refreshCache(),
@@ -1142,6 +1310,17 @@ const messageHandlers = {
   hasApiKey: {
     run: () => getApiKey().then((k) => ({ hasKey: !!k })),
     fallback: { hasKey: false },
+  },
+  checkUpdate: {
+    run: (m) => syncUpdateBadge(!!(m && m.force)),
+    fallback: (e) => ({
+      status: "failed",
+      error: (e && e.message) || "检查失败",
+      current: chrome.runtime.getManifest().version,
+      latest: "",
+      url: "",
+      newer: false,
+    }),
   },
 };
 

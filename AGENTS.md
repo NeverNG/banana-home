@@ -1,6 +1,6 @@
 # AGENTS.md — banana-home 项目开发规范
 
-Chrome MV3 新标签页扩展「香蕉起始页」v1.4.0（`D:\test1\banana-home`）。
+Chrome MV3 新标签页扩展「香蕉起始页」v0.0.1（`D:\test1\banana-home`）。
 入口 `index.html`，覆盖 `chrome_url_overrides.newtab`；service worker 为 `background.js`。
 
 ## 硬性规范：网格/清爽模式的资源加载门控
@@ -47,6 +47,8 @@ Chrome MV3 新标签页扩展「香蕉起始页」v1.4.0（`D:\test1\banana-home
 - **书签卡 / 导航交互走事件委托**：书签卡与收藏夹导航的事件（`mouseover`/`mouseout`/`click`，以及不冒泡的图标 `load`/`error` 用容器捕获）统一挂在 `#bm-groups` / `#bm-nav` 上（`initBookmarkDelegates` / `initNavDelegates`）。新增卡片/节点时不要再逐个 `addEventListener`——几百个书签会产生上千闭包，且每次整栏重渲都要重建。卡片可通过 `card.dataset.url` + `bookmarkByUrl` 取回数据。
 - **快捷方式图标**：由 main.js 的 `resolveQuickIcon` 发起、后台 `getSiteIcon` 统一解析并缓存。目标样式是**浏览器标签页左侧的 favicon**，候选顺序固定为「页面声明的 `<link rel="icon">`（SVG → 64px+ → 32px+ → 其它）→ 根目录 `/favicon.ico`」，最多试 4 个；**不要**取 `apple-touch-icon` / `fluid-icon` / `mask-icon` / JSON-LD `logo` / `og:image`——那些是应用图标或分享图，和标签页图标外观不同（用户明确要求标签页样式）。原始图标上限 1MB，位图统一用 `createImageBitmap` + `OffscreenCanvas` 缩成 ≤64px PNG 再缓存（SVG 保留原样）——否则 DeepSeek 这类 205KB 的 favicon.ico 会因超限被丢弃、退化成首字母（事故：DeepSeek 显示「D」）。都取不到才回退「自定义 emoji → 首字母色块」，任何一步失败都不能留空白。缓存按 origin 存在 `chrome.storage.local` 的 `siteIcon:<origin>`：首次进入抓取，12h 内直接用，过期后用 `If-None-Match` / `If-Modified-Since` 条件请求校验（304 只更新时间戳，200 且内容变化则覆盖缓存，页面立刻拿到新图）；没取到图标的负缓存 6h；7 天后重新解析页面（防图标换路径）；缓存带 `v` 版本号，改解析逻辑时递增可让旧缓存立即失效。快捷方式**不要**再用 `chrome._favicon`（未命中会返回默认地球图标，看起来像"没获取到"）；书签卡仍用它做兜底。`getSiteIcon` 只在网格模式渲染快捷方式时触发，清爽模式不会请求。
 - **存储 key 命名**：`chrome.storage.local` 持久化用户配置；`chrome.storage.session` 放缓存（书签列表/定位/壁纸）。新 key 若要随"导出配置"走，必须加入 `EXPORT_KEYS`（main.js）。
+- **版本号 / 关于区单一来源**：扩展版本号只在 `manifest.json` 的 `version` 维护（`package.json` 同步），设置「常规」页的版本号由 main.js `getAppVersion()`（`chrome.runtime.getManifest().version`）读取，GitHub 按钮地址是 `ABOUT_REPO_URL`，更新日志弹窗内容来自 main.js 的 `CHANGELOG` 数组——**发版时改 `manifest.json` 并在 `CHANGELOG` 最前面插一条**（`version` 与 manifest 完全一致，否则「当前版本」徽标不显示）。不要在 HTML 里写死版本号。
+- **更新提示 / 发布渠道**：`background.js` 的 `fetchLatestVersion()` 以 GitHub Releases 的 `releases/latest` 作为远端最新版本（tag 去掉 `v` 前缀）；API 被限流/不可用时退回 `HEAD .../releases/latest`，从跳转后的 `/releases/tag/vX.Y.Z` 解析版本（不耗配额）。远端版本 > 本地 `manifest.version` 且用户没点过图标 → `chrome.action` 角标显示「新」，点图标打开发布页并把版本写入 `updateSeen`（同一版本不再打扰；没有更新时点图标打开主页）；角标只在后台 Service Worker 维护（12h 定时 + 6h 缓存 + `alarms` 权限），清爽模式也不占页面资源。**发版流程：改 `manifest.json` 的 `version` + `CHANGELOG` → 在 GitHub 创建同 tag 的 Release（如 `v0.0.1`，附 zip 安装包）**；不做 Release 就不会提示（tag 必须是 `vX.Y.Z` 或 `X.Y.Z`）。
 - **TDZ 陷阱**：顶层数组/对象初始化时引用的 `const` 必须**已在其之前定义**，或用字符串字面量（历史事故：`SAVED_WP_KEY` 定义在 `EXPORT_KEYS` 之后导致 main.js 加载崩溃）。`node --check` 查不出这类运行时错误。
 - **门控验证**：改动资源加载相关代码后，用真实浏览器 CDP（`Extensions.loadUnpacked` + 检查 `document.scripts`）或 vm mock 测试验证清爽模式零组件脚本；纯逻辑改动至少 `node --check` + 针对性 vm 测试。提交前统一跑 `node tests/check.js`（等价 `npm run check`）：语法全量解析 + 基础脚本白名单 + 内联脚本检查 + CSS 结构 + `fillPage`/增量渲染的 vm 断言。
 - **用户习惯**：Chrome `chrome://extensions` 开发者模式加载已解压扩展自测，不自动打包 exe/zip。
