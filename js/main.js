@@ -3359,6 +3359,16 @@ const ABOUT_REPO_URL = "https://github.com/NeverNG/banana-home";
 /** 更新日志:发新版本时在最前面插一条(version 与 manifest.json 保持一致,date 用 YYYY-MM-DD) */
 const CHANGELOG = [
   {
+    version: "0.0.2",
+    date: "2026-11-24",
+    items: [
+      "设置「常规」新增关于区:版本号、GitHub 项目链接、更新日志弹窗、手动「检查更新」",
+      "更新提示:GitHub 有新 Release 时扩展图标显示「新」角标,点图标打开发布页下载新版(接口限流时自动兜底)",
+      "版本号统一为 manifest 单一来源,设置页与更新日志自动跟随",
+      "扩展名称与界面文案统一为「香蕉起始页」",
+    ],
+  },
+  {
     version: "0.0.1",
     date: "2026-11-24",
     items: [
@@ -3368,8 +3378,6 @@ const CHANGELOG = [
       "14 张左栏组件卡:时钟 / 日历(农历·节气·节假日)/ 天气 / 地图 / 名言 / 宠物 / 白噪音 / 股票 / 系统监控 / 热榜 / 扑克牌 / 梦想之车 / 八卦罗盘 / 访问活跃度",
       "多引擎搜索 + 搜索历史与联想(GBK/UTF-8 自动识别)+ 自定义引擎拖拽排序",
       "五区域透明度与磨砂度、清爽背景蒙版、渐变 / 纯色 / Bing 壁纸可切换",
-      "设置「常规」新增关于区:版本号、GitHub 项目链接、更新日志弹窗、手动「检查更新」",
-      "更新提示:GitHub 有新 Release 时扩展图标显示「新」角标,点图标打开发布页下载新版(接口限流时自动兜底)",
       "性能:空闲零帧、书签卡增量渲染、事件委托、后台 Service Worker 轻量化",
       "配置导出 / 导入(JSON),接口鸣谢与捐助支持",
     ],
@@ -3382,7 +3390,7 @@ function getAppVersion() {
     const v = chrome.runtime.getManifest().version;
     if (v) return v;
   } catch (e) { /* 非扩展环境(直接开 html) */ }
-  return "0.0.1";
+  return "0.0.2";
 }
 
 /** 填充「关于」区(版本号 + GitHub 地址);打开设置时刷新一次,保证版本号跟随 manifest */

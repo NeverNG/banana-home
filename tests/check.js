@@ -598,7 +598,7 @@ function runBackground(opts) {
         onMessage: { addListener() {} },
         onInstalled: { addListener() {} },
         onStartup: { addListener() {} },
-        getManifest: () => ({ version: "0.0.1" }),
+        getManifest: () => ({ version: "0.0.2" }),
       },
       action: {
         onClicked: { addListener() {} },
