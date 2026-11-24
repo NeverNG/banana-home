@@ -3633,19 +3633,34 @@ body.no-anim .main-row {
   transform: scale(1.3);
 }
 
-/* ===== 接口列表弹窗 ===== */
-.api-actions {
+/* ===== 接口列表(设置 · 鸣谢) ===== */
+.api-head {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.api-head-left {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.api-summary {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .api-list {
-  max-height: 380px;
+  max-height: 300px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding-right: 2px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
 }
@@ -3657,6 +3672,11 @@ body.no-anim .main-row {
   padding: 8px 10px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);
+  transition: background 0.15s;
+}
+
+.api-row:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .api-info {
@@ -3802,6 +3822,79 @@ body.no-anim .main-row {
 
 .tab-panel[hidden] {
   display: none;
+}
+
+/* ===== 设置弹窗内的分组卡片(数据 / 鸣谢页签) ===== */
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.settings-card[hidden] {
+  display: none;
+}
+
+.settings-card .dialog-tip {
+  margin: 0;
+}
+
+.settings-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-card-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* 两列等宽操作按钮(导出 / 导入) */
+.settings-btn-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.settings-btn-grid .alpha-default {
+  justify-content: center;
+  padding: 9px 12px;
+  font-size: 12.5px;
+}
+
+/* 「包含内容」标签 */
+.settings-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.settings-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 /* 跨页拖拽:跟随代理 */
@@ -4395,26 +4488,20 @@ body.no-anim .main-row {
 .act-legend i.l4 { background: linear-gradient(135deg, #667eea, #764ba2); }
 
 
-/* 鸣谢页签:捐助模块 */
-.donate-section {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
+/* 鸣谢页签:捐助卡片(卡片主体复用 .settings-card) */
 .donate-tip {
+  margin: 0;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.65);
-  margin: 6px 0 12px;
   line-height: 1.5;
 }
 .donate-qr {
   display: flex;
-  gap: 14px;
+  gap: 12px;
   justify-content: center;
 }
 .donate-item {
-  flex: 1;
-  max-width: 160px;
+  flex: 0 1 128px;
   margin: 0;
   text-align: center;
 }
@@ -4423,7 +4510,7 @@ body.no-anim .main-row {
   display: block;
   border-radius: 10px;
   background: #fff;
-  padding: 6px;
+  padding: 5px;
   box-sizing: border-box;
 }
 .donate-item figcaption {

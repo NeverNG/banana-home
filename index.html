@@ -487,17 +487,51 @@
             <button type="button" id="btn-card-heights-reset-all" class="alpha-default" title="恢复所有卡片默认高度">全部默认</button>
           </div>
           <div class="card-height-list"><!-- 卡片行由 main.js 按 gridgate.js 的 CARD_META 生成 --></div>
-          </div>
         </div>
       </div>
       <div class="tab-panel" data-panel="data" hidden>
-        <p class="dialog-tip">导出当前全部配置(快捷方式/搜索引擎/AI 设置/外观/背景)为 JSON 文件,换设备或防丢失时可导入恢复。</p>
-        <button type="button" id="btn-export-config" class="alpha-default">⬇️ 导出配置</button>
-        <button type="button" id="btn-import-config" class="alpha-default">⬆️ 导入配置</button>
+        <div class="settings-card">
+          <div class="settings-card-head">
+            <span class="settings-card-title">📦 配置备份</span>
+            <span class="settings-card-sub">JSON 文件</span>
+          </div>
+          <p class="dialog-tip">把当前全部配置导出为一个 JSON 文件;换设备、重装扩展或设置改乱时,导入即可恢复。</p>
+          <div class="settings-btn-grid">
+            <button type="button" id="btn-export-config" class="alpha-default" title="把全部配置导出为 JSON 文件">⬇️ 导出配置</button>
+            <button type="button" id="btn-import-config" class="alpha-default" title="从 JSON 文件恢复配置">⬆️ 导入配置</button>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="settings-card-head">
+            <span class="settings-card-title">📋 包含内容</span>
+          </div>
+          <div class="settings-chips">
+            <span class="settings-chip">快捷方式</span>
+            <span class="settings-chip">搜索引擎</span>
+            <span class="settings-chip">AI 设置与 Key</span>
+            <span class="settings-chip">外观透明度 / 磨砂度</span>
+            <span class="settings-chip">背景与壁纸</span>
+            <span class="settings-chip">自选股</span>
+            <span class="settings-chip">组件布局 / 档位</span>
+            <span class="settings-chip">书签 AI 标题与简介</span>
+          </div>
+          <p class="settings-note">导入会整体覆盖以上配置;文件里含有 API Key,请勿随意分享。</p>
+        </div>
       </div>
       <div class="tab-panel" data-panel="credits" hidden>
-        <div class="donate-section">
-          <span class="alpha-title">☕ 捐助支持</span>
+        <div class="settings-card">
+          <div class="api-head">
+            <div class="api-head-left">
+              <span class="settings-card-title">🌐 接口状态</span>
+              <span class="api-summary" id="api-summary">检测中…</span>
+            </div>
+            <button type="button" id="btn-api-recheck" class="alpha-default" title="重新检测所有外部接口">🔄 重新检测</button>
+          </div>
+          <p class="dialog-tip">当前主页用到的外部接口及可用状态,特别鸣谢以下服务与数据源:</p>
+          <div class="api-list" id="api-list-body"><!-- 由 JS 渲染 --></div>
+        </div>
+        <div class="settings-card donate-section">
+          <span class="settings-card-title">☕ 捐助支持</span>
           <p class="donate-tip">如果这个起始页对你有帮助,欢迎请开发者喝杯蜜雪冰城柠檬水 ❤️</p>
           <div class="donate-qr">
             <figure class="donate-item">
@@ -510,11 +544,6 @@
             </figure>
           </div>
         </div>
-        <p class="dialog-tip">当前主页用到的所有外部接口及可用状态,特别鸣谢以下服务的支持:</p>
-        <div class="api-actions">
-          <button type="button" id="btn-api-recheck" class="alpha-default">🔄 重新检测</button>
-        </div>
-        <div class="api-list" id="api-list-body"><!-- 由 JS 渲染 --></div>
       </div>
 </div><!-- /dialog-scroll -->
       <div class="dialog-actions">

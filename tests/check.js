@@ -575,6 +575,31 @@ try {
   fail("关于区检查异常: " + e.message);
 }
 
+/* ---------- 7.6 设置·数据 / 鸣谢页签布局 ---------- */
+console.log("\n[7.6] 设置·数据 / 鸣谢页签");
+try {
+  const openDivs = (indexHtml.match(/<div\b/g) || []).length;
+  const closeDivs = (indexHtml.match(/<\/div>/g) || []).length;
+  assert(openDivs === closeDivs, "index.html 的 <div> 开闭标签数量一致(" + openDivs + "/" + closeDivs + ")");
+
+  const scrollEnd = indexHtml.indexOf("/dialog-scroll");
+  assert(scrollEnd > 0, "设置弹窗有 .dialog-scroll 滚动区");
+  const dataAt = indexHtml.indexOf('data-panel="data"');
+  const creditsAt = indexHtml.indexOf('data-panel="credits"');
+  assert(dataAt > 0 && dataAt < scrollEnd, "数据页签在滚动区内部(不再被挤出到底部)");
+  assert(creditsAt > 0 && creditsAt < scrollEnd, "鸣谢页签在滚动区内部(内容可正常滚动)");
+
+  assert(indexHtml.indexOf('class="settings-btn-grid"') > 0, "导出/导入按钮使用两列网格");
+  assert(indexHtml.indexOf('id="btn-export-config"') > 0 && indexHtml.indexOf('id="btn-import-config"') > 0, "导出/导入按钮都存在");
+  assert(indexHtml.indexOf('id="api-summary"') > 0, "鸣谢页签有接口状态汇总");
+  assert(indexHtml.indexOf('id="btn-api-recheck"') > 0, "鸣谢页签有重新检测按钮");
+  assert(/function updateApiSummary\(\)/.test(mainSrc), "updateApiSummary 已定义");
+  assert((mainSrc.match(/updateApiSummary\(\);/g) || []).length >= 3, "接口状态变化时会刷新汇总");
+  assert(css.indexOf(".settings-card {") > 0 && css.indexOf(".settings-chip {") > 0, "数据/鸣谢卡片与标签样式存在");
+} catch (e) {
+  fail("数据/鸣谢页签检查异常: " + e.message);
+}
+
 /* ---------- 8. 快捷方式图标自动获取(logo + 缓存 + 自动更新) ---------- */
 console.log("\n[8] 快捷方式图标:logo 解析 / 缓存 / 更新");
 

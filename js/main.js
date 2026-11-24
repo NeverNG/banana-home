@@ -2135,6 +2135,35 @@ const API_CHECK_TTL_MS = 5 * 60 * 1000;
 let apiCheckCache = null;   // { t, results, hasKey }
 let apiCheckInFlight = false;
 
+/** 更新鸣谢页签的接口汇总(共 N 个 · 可用 X · 异常 Y · 未配置 Z) */
+function updateApiSummary() {
+  const el = document.getElementById("api-summary");
+  if (!el) return;
+  const total = (window._apiList || []).length;
+  if (!total) {
+    el.textContent = "";
+    return;
+  }
+  let ok = 0;
+  let fail = 0;
+  let warn = 0;
+  let checking = 0;
+  document.querySelectorAll(".api-status").forEach((s) => {
+    if (s.classList.contains("ok")) ok++;
+    else if (s.classList.contains("fail")) fail++;
+    else if (s.classList.contains("warn")) warn++;
+    else checking++;
+  });
+  if (checking) {
+    el.textContent = "共 " + total + " 个 · 检测中…";
+    return;
+  }
+  let text = "共 " + total + " 个 · 可用 " + ok;
+  if (fail) text += " · 异常 " + fail;
+  if (warn) text += " · 未配置 " + warn;
+  el.textContent = text;
+}
+
 /** 把检测结果写回状态列(可重复调用:结果来自缓存时同样走这里) */
 function applyApiStatus(results, hasKey) {
   const apiList = window._apiList || [];
@@ -2155,6 +2184,7 @@ function applyApiStatus(results, hasKey) {
       el.className = "api-status fail";
     }
   });
+  updateApiSummary();
 }
 
 function renderApiList() {
@@ -2188,6 +2218,7 @@ function renderApiList() {
       row.append(info, status);
       box.appendChild(row);
     });
+    updateApiSummary(); // 先显示「检测中…」,结果回来后再刷新
     if (apiCheckCache && Date.now() - apiCheckCache.t < API_CHECK_TTL_MS) {
       applyApiStatus(apiCheckCache.results, apiCheckCache.hasKey); // 命中缓存:不再打网络
     } else {
@@ -2229,6 +2260,7 @@ function checkApis(force) {
       el.textContent = text;
       el.className = "api-status " + cls;
     });
+    updateApiSummary();
   }
   function doCheckApis(apiKey) {
     const hasKey = (apiKey || "").trim().length > 0;
